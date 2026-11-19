@@ -14,6 +14,21 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: scripts
+      - name: Restore scanner bytes from exact committed blobs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # checkout may render text as CRLF on Windows. Restore only reviewed
+          # scanner files with conversion disabled; Python retains exact SHA256 checks.
+          git -c core.autocrlf=false -c core.eol=lf checkout-index --force -- scripts/ci-windows-parity.py scripts/ci-windows-archive-contract.py
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot restore exact scanner bytes' }
+          $pins = @{
+            'scripts/ci-windows-parity.py' = 'db4aaf0268069fa774ad8b32e8792b557d2350a8ce7b8d99876e4a6c5fd1b348'
+            'scripts/ci-windows-archive-contract.py' = '5d8bc9bc75c25d1b4e424d39cdf553ad53c314f3d4d27eb3c9bf2e56374987ab'
+          }
+          foreach ($path in $pins.Keys) {
+            if ((Get-FileHash -Algorithm SHA256 $path).Hash.ToLowerInvariant() -ne $pins[$path]) { throw "Scanner blob mismatch: $path" }
+          }
       - name: Validate exact existing artifact and source resource pin
         id: source
         shell: pwsh
