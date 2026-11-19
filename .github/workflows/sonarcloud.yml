@@ -1,27 +1,59 @@
-name: SonarCloud
+name: PSD targeted diagnostic (not Sonar or workspace certification)
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: sonarcloud-${{ github.ref }}
-  # A push to main is the run that publishes coverage; superseded runs there would never finish.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: psd-targeted-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  sonarcloud:
-    # Track shared CI improvements on main.
-    uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
+  default:
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@7d4597abb21f0a8fa959395b0789e79fa19849ca
     with:
-      pdf-test-fonts: true
-      # The codec and format code behind features that are off by default. Without these the
-      # coverage build never compiles it, and new code there reads as untested.
-      cargo-features: >-
-        craft-image-codecs/avif,craft-image-codecs/avif-decode,craft-video/dnx,craft-video/vp8,craft-video/prores,craft-video/h264,craft-video/hevc,craft-video/vp9,craft-video/av1,craft-video/threads,craft-audio/decode,craft-audio/encode,craft-audio/peaks,craft-audio/rayon,craft-audio/serde,craft-media/matroska,craft-media/ogg,craft-media/bitstream,craft-media/serde,craft-mesh/stl,craft-mesh/obj,craft-mesh/ply,craft-mesh/gltf,craft-metafile/write,craft-image-codecs/sgi,craft-image-codecs/sunraster,craft-jsonrpc/async-lines
-    secrets: inherit
+      os: '["ubuntu-24.04","windows-latest","macos-latest"]'
+      craft-fonts-ref: ""
+      require-craft-fonts: false
+      targets: ""
+      tools: ""
+      free-disk-space: false
+      timeout-minutes: 30
+      gate-timeout-minutes: 25
+      command: |
+        set -euo pipefail
+        cargo fmt -p craft-psd --check
+        cargo test -p craft-psd --locked --all-targets
+        cargo test -p craft-psd --locked --doc
+        cargo build -p craft-psd --locked --examples
+        cargo doc -p craft-psd --locked --no-deps
+        cargo clippy -p craft-psd --locked --all-targets -- -D warnings
+  all-features:
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@7d4597abb21f0a8fa959395b0789e79fa19849ca
+    with:
+      os: '["ubuntu-24.04","windows-latest","macos-latest"]'
+      craft-fonts-ref: ""
+      require-craft-fonts: false
+      targets: ""
+      tools: ""
+      free-disk-space: false
+      timeout-minutes: 30
+      gate-timeout-minutes: 25
+      setup-command: |
+        set -euo pipefail
+        if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; assert sys.version_info >= (3, 9)' >/dev/null 2>&1; then
+          py=python3
+        else
+          py=python
+          "$py" -c 'import sys; assert sys.version_info >= (3, 9)'
+        fi
+        "$py" -c 'import subprocess,sys; subprocess.run([sys.executable,"scripts/psd-diagnostic/fetch.py"],timeout=360,check=True)'
+      command: |
+        set -euo pipefail
+        cargo test -p craft-psd --locked --all-targets --all-features
+        cargo test -p craft-psd --locked --doc --all-features
+        cargo build -p craft-psd --locked --examples --all-features
+        cargo doc -p craft-psd --locked --no-deps --all-features
+        cargo clippy -p craft-psd --locked --all-targets --all-features -- -D warnings
