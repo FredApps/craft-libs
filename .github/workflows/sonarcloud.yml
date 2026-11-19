@@ -1,30 +1,30 @@
-name: SonarCloud
-
+name: PSD alpha-name scoped three-platform validation
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened]
-
+  workflow_dispatch:
 permissions:
   contents: read
-
 concurrency:
-  group: sonarcloud-${{ github.ref }}
-  # A push to main is the run that publishes coverage; superseded runs there would never finish.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
-
+  group: psd-alpha-7798dad7-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  sonarcloud:
-    # Track shared CI improvements on main.
-    uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
+  psd:
+    if: github.repository == 'FredApps/craft-libs' && github.ref == 'refs/heads/diag/psd-alpha-7798dad7'
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@ecb64b2acb8731f0e2eb8f55fd2f45424bef75d0
     with:
-      pdf-test-fonts: true
-      # The instrumented build runs without a dependency cache: its 1.2 GB entry does not fit the
-      # repository's 10 GB cache budget beside the Workspace gate's. It runs on main only.
-      build-cache: false
-      # The codec and format code behind features that are off by default. Without these the
-      # coverage build never compiles it, and new code there reads as untested.
-      cargo-features: >-
-        craft-image-codecs/avif,craft-image-codecs/avif-decode,craft-video/dnx,craft-video/vp8,craft-video/prores,craft-video/h264,craft-video/hevc,craft-video/vp9,craft-video/av1,craft-video/threads,craft-audio/decode,craft-audio/encode,craft-audio/peaks,craft-audio/rayon,craft-audio/serde,craft-media/matroska,craft-media/ogg,craft-media/bitstream,craft-media/serde,craft-mesh/stl,craft-mesh/obj,craft-mesh/ply,craft-mesh/gltf,craft-metafile/write,craft-image-codecs/sgi,craft-image-codecs/sunraster,craft-jsonrpc/async-lines
-    secrets: inherit
+      os: '["ubuntu-24.04", "windows-latest", "macos-latest"]'
+      select-os: '[]'
+      timeout-minutes: 20
+      gate-timeout-minutes: 18
+      tools: ''
+      targets: ''
+      craft-fonts-ref: ''
+      require-craft-fonts: false
+      cache-name: psd-alpha-scoped
+      command: |
+        git fetch --no-tags origin 7798dad7fbc89375ed533184febbd3e22facc82f
+        git diff --exit-code 7798dad7fbc89375ed533184febbd3e22facc82f HEAD -- . ':(exclude).github/workflows/sonarcloud.yml'
+        echo 'Scoped craft-psd default and serde tests/doctests and strict lint; not corpus/all-features/workspace or consumer certification.'
+        cargo fmt -p craft-psd -- --check
+        cargo test --locked -p craft-psd
+        cargo test --locked -p craft-psd --features serde
+        cargo clippy --locked -p craft-psd --all-targets --features serde -- -D warnings
