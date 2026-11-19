@@ -103,7 +103,7 @@ def compiler_units(lines):
 
 def verify_binaries(metadata, inventory, kind, units):
     """Return unique Cargo artifact matches; byte equality is checked separately."""
-    expected = {(t["package"], t["name"], "lib" if t["kind"] == "proc-macro" else t["kind"])
+    expected = {(t["package"], t["name"], t["kind"])
                 for t in configured_targets(metadata) if t["kind"] in KINDS[kind]}
     actual = {(s["package-name"], s["binary-name"], s["kind"])
               for s in inventory["rust-suites"].values()}
@@ -117,8 +117,7 @@ def verify_binaries(metadata, inventory, kind, units):
         package, name, target_kind = suite["package-name"], suite["binary-name"], suite["kind"]
         matching = [u for u in units.values() if u["package_id"] == packages[package]
                     and u["target"]["name"] == name and u["profile"]["test"]
-                    and (target_kind in u["target"]["kind"] or
-                         target_kind == "lib" and "proc-macro" in u["target"]["kind"])]
+                    and target_kind in u["target"]["kind"]]
         if len(matching) != 1:
             raise ValueError("test binary lacks exactly one actual compiler artifact")
         matched[binary_id] = matching[0]

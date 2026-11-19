@@ -26,6 +26,19 @@ def stream(*records):
     return [json.dumps(r) for r in records] + [json.dumps({"reason": "build-finished", "success": True})]
 
 class Tests(unittest.TestCase):
+    def test_proc_macro_kind_is_not_flattened_to_lib(self):
+        data = metadata()
+        data["packages"][0]["targets"][0]["kind"] = ["proc-macro"]
+        item = artifact()
+        item["target"]["kind"] = ["proc-macro"]
+        units = audit.compiler_units(stream(item))
+        suite = {"package-name": "p", "binary-name": "p", "kind": "proc-macro"}
+        inventory = {"rust-suites": {"p": suite}}
+        audit.verify_binaries(data, inventory, "unit", units)
+        suite["kind"] = "lib"
+        with self.assertRaisesRegex(ValueError, "inventory"):
+            audit.verify_binaries(data, inventory, "unit", units)
+
     def test_archive_bytes_are_bound_to_unique_compiler_artifact(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve()

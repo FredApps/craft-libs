@@ -19,20 +19,20 @@ metadata = c.read("configured-metadata.json")
 full = c.read("inventory.json")
 units = audit.compiler_units(Path("compiler-artifacts.jsonl").read_text().splitlines())
 expected = {("selector-a", "selector_a", "lib"), ("selector-b", "selector_b", "lib"),
-            ("selector-macro", "selector_macro", "lib"), ("selector-a", "same", "test"),
+            ("selector-macro", "selector_macro", "proc-macro"), ("selector-a", "same", "test"),
             ("selector-a", "demo", "example"), ("selector-b", "always", "test")}
 if config == "all-features":
     expected |= {("selector-b", "same", "test"), ("selector-b", "gated", "example")}
 actual = {(s["package-name"], s["binary-name"], s["kind"]) for s in full["rust-suites"].values()}
 if actual != expected or len(actual) != len(full["rust-suites"]):
-    raise ValueError("combined fixture binary inventory mismatch")
+    raise ValueError(f"combined fixture binary inventory mismatch: expected={sorted(expected)} actual={sorted(actual)}")
 full_cases = c.cases(full)
 if len(full_cases) != len(expected) + 1 or sum(full_cases.values()) != 1:
     raise ValueError("combined fixture case/ignored inventory mismatch")
 views = {}
 digests = {}
 for kind, kinds in audit.KINDS.items():
-    normalized = {"lib" if k == "proc-macro" else k for k in kinds}
+    normalized = kinds
     suites = {key: value for key, value in full["rust-suites"].items() if value["kind"] in normalized}
     view = {**full, "rust-suites": suites, "test-count": sum(len(s["testcases"]) for s in suites.values())}
     part = audit.verify_archive_bytes(metadata, view, kind, units, Path.cwd() / "extracted")
@@ -55,7 +55,7 @@ base = ["--archive-file", "tests.tar.zst", "--extract-to", str(Path.cwd() / "ext
 proofs = []
 # One process per original partition, preserving eight logical identities.
 # This is not a proposed application worker count or timing benchmark.
-for kind, expression in (("unit", "kind(lib)"), ("integration", "kind(test) | kind(example)")):
+for kind, expression in (("unit", "kind(lib) | kind(proc-macro)"), ("integration", "kind(test) | kind(example)")):
     union = {}
     for shard in range(1, 9):
         args = [*base, "-E", expression, "--partition", f"hash:{shard}/8"]
