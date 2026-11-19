@@ -2,8 +2,10 @@
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
+import stat
+import zipfile
 import subprocess
 import sys
 
@@ -48,7 +50,7 @@ def files(root):
     for path in sorted(root.rglob("*")):
         if path.is_symlink():
             raise ValueError("symlink in archive payload")
-        if path.is_file() and path.name != "manifest.json":
+        if path.is_file() and path != root / "manifest.json":
             found[path.relative_to(root).as_posix()] = digest(path)
     if not found:
         raise ValueError("empty bundle")
@@ -81,14 +83,27 @@ def cases(data, selected=False):
 
 
 def prepare(config):
-    # The upload contains only fixed test artifacts and pinned public fixtures, never credentials.
-    shutil.copytree(Path("corpus"), BUNDLE / "corpus")
-    shutil.copytree(Path(".test-inputs/photocraft/corpus"), BUNDLE / "source-corpus")
-    shutil.copytree(Path(os.environ["RUNNER_TEMP"]) / "craft-pdf-test-fonts", BUNDLE / "pdf-fonts")
+    # Pack hidden public fixture files too, without enabling broad hidden-file uploads.
+    sources = {
+        "corpus": Path("corpus"),
+        "source-corpus": Path(".test-inputs/photocraft/corpus"),
+        "pdf-fonts": Path(os.environ["RUNNER_TEMP"]) / "craft-pdf-test-fonts",
+    }
+    entries = []
+    for label, root in sources.items():
+        if not root.is_dir() or root.is_symlink():
+            raise ValueError("missing or linked runtime root")
+        for path in sorted(root.rglob("*")):
+            if path.is_symlink():
+                raise ValueError("linked runtime fixture")
+            if path.is_file():
+                entries.append((path, label + "/" + path.relative_to(root).as_posix()))
+    with zipfile.ZipFile(BUNDLE / "runtime.zip", "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
+        for path, name in entries:
+            archive.write(path, name)
     write(BUNDLE / "inventory-normalized.json", inventory(BUNDLE / "inventory.json"))
     write(BUNDLE / "manifest.json", {"identity": identity(config), "files": files(BUNDLE)})
     print("BUNDLE_BYTES", sum(p.stat().st_size for p in BUNDLE.rglob("*") if p.is_file()))
-
 
 def verify(config):
     manifest = read(BUNDLE / "manifest.json")
@@ -96,15 +111,36 @@ def verify(config):
         raise ValueError("producer identity differs from this same-run consumer")
     if manifest["files"] != files(BUNDLE):
         raise ValueError("archive payload digest or inventory differs")
-    # Never extract into arbitrary manifest-supplied paths.
-    for source, target in (
-        ("corpus", Path("corpus")),
-        ("source-corpus", Path(".test-inputs/photocraft/corpus")),
-        ("pdf-fonts", Path(os.environ["RUNNER_TEMP"]) / "craft-pdf-test-fonts"),
-    ):
-        shutil.copytree(BUNDLE / source, target, dirs_exist_ok=True)
+    roots = {
+        "corpus": Path("corpus"),
+        "source-corpus": Path(".test-inputs/photocraft/corpus"),
+        "pdf-fonts": Path(os.environ["RUNNER_TEMP"]) / "craft-pdf-test-fonts",
+    }
+    # No archive-provided path is passed to extractall; validate all members before writing.
+    destinations = []
+    seen = set()
+    with zipfile.ZipFile(BUNDLE / "runtime.zip") as archive:
+        for info in archive.infolist():
+            name = info.filename
+            parts = PurePosixPath(name).parts
+            if (name.startswith("/") or "\\" in name or ":" in name or
+                    len(parts) < 2 or any(p in (".", "..") for p in name.split("/")) or
+                    parts[0] not in roots or info.is_dir() or stat.S_ISLNK(info.external_attr >> 16)):
+                raise ValueError("unsafe fixture member")
+            target = roots[parts[0]].joinpath(*parts[1:])
+            target.resolve().relative_to(roots[parts[0]].resolve())
+            if any(p.is_symlink() for p in (target, *target.parents)):
+                raise ValueError("linked fixture destination")
+            key = str(target.resolve()).casefold()
+            if key in seen:
+                raise ValueError("duplicate fixture destination")
+            seen.add(key)
+            destinations.append((info, target))
+        for info, target in destinations:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(info) as source, target.open("wb") as destination:
+                shutil.copyfileobj(source, destination)
     print("PROVENANCE_VERIFIED", config)
-
 
 def compare():
     if inventory("pilot-current.json") != read(BUNDLE / "inventory-normalized.json"):
