@@ -15,6 +15,7 @@ powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Servi
 printf 'PRODUCER_BUILD_START %s config=%s kind=%s\n' "$(date -u +%FT%TZ)" "$1" "$2"
 # The forwarded stream includes cached compiler-artifact records. No second compile is needed.
 cargo nextest archive --workspace "${features[@]}" "${targets[@]}" --locked --cargo-message-format json --archive-file pilot-bundle/tests.tar.zst > pilot-bundle/compiler-artifacts.jsonl
-cargo nextest list --archive-file pilot-bundle/tests.tar.zst --profile ci --message-format json > pilot-bundle/inventory.json
+# Keep the independent extraction alive for byte comparison with Cargo's output files.
+cargo nextest list --archive-file pilot-bundle/tests.tar.zst --extract-to "$RUNNER_TEMP/pilot-archive-verify" --profile ci --message-format json > pilot-bundle/inventory.json
 python scripts/ci-windows-integrated-audit.py capture "$1" "$2"
 printf 'PRODUCER_END %s\n' "$(date -u +%FT%TZ)"

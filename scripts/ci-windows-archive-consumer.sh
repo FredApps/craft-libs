@@ -14,9 +14,11 @@ export CRAFT_PDF_TEST_FONT_DIR="$RUNNER_TEMP/craft-pdf-test-fonts"
 args=(--archive-file pilot-bundle/tests.tar.zst --extract-to "$GITHUB_WORKSPACE" --extract-overwrite --profile ci)
 cargo nextest list "${args[@]}" --message-format json > pilot-current.json
 python scripts/ci-windows-archive-contract.py compare
+python scripts/ci-windows-archive-contract.py verify-executables
 cargo nextest list "${args[@]}" --partition "hash:$2/8" --message-format json > pilot-partition.json
 printf 'RUNTIME_START %s\n' "$(date -u +%FT%TZ)"
 cargo nextest run "${args[@]}" --partition "hash:$2/8"
+python scripts/ci-windows-archive-contract.py verify-executables
 git diff --exit-code -- Cargo.lock
 python scripts/ci-windows-archive-contract.py proof "$1" "$2" "$3"
 printf 'RUNTIME_END %s\n' "$(date -u +%FT%TZ)"
