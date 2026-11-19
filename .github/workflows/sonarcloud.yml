@@ -1,30 +1,30 @@
-name: SonarCloud
-
+name: SVG path-format scoped validation
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened]
-
+  workflow_dispatch:
 permissions:
   contents: read
-
 concurrency:
-  group: sonarcloud-${{ github.ref }}
-  # A push to main is the run that publishes coverage; superseded runs there would never finish.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
-
+  group: svg-path-format-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  sonarcloud:
-    # Track shared CI improvements on main.
-    uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
+  svg:
+    if: github.repository == 'FredApps/craft-libs' && github.ref == 'refs/heads/diag/svg-path-format-8b1f6c0d'
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@ecb64b2acb8731f0e2eb8f55fd2f45424bef75d0
     with:
-      pdf-test-fonts: true
-      # The instrumented build runs without a dependency cache: its 1.2 GB entry does not fit the
-      # repository's 10 GB cache budget beside the Workspace gate's. It runs on main only.
-      build-cache: false
-      # The codec and format code behind features that are off by default. Without these the
-      # coverage build never compiles it, and new code there reads as untested.
-      cargo-features: >-
-        craft-image-codecs/avif,craft-image-codecs/avif-decode,craft-video/dnx,craft-video/vp8,craft-video/prores,craft-video/h264,craft-video/hevc,craft-video/vp9,craft-video/av1,craft-video/threads,craft-audio/decode,craft-audio/encode,craft-audio/peaks,craft-audio/rayon,craft-audio/serde,craft-media/matroska,craft-media/ogg,craft-media/bitstream,craft-media/serde,craft-mesh/stl,craft-mesh/obj,craft-mesh/ply,craft-mesh/gltf,craft-metafile/write,craft-image-codecs/sgi,craft-image-codecs/sunraster,craft-jsonrpc/async-lines
-    secrets: inherit
+      os: '["ubuntu-24.04", "windows-latest"]'
+      select-os: '[]'
+      timeout-minutes: 20
+      gate-timeout-minutes: 18
+      tools: ''
+      targets: ''
+      craft-fonts-ref: ''
+      require-craft-fonts: false
+      cache-name: svg-path-format-scoped
+      command: |
+        git fetch --no-tags origin 8b1f6c0d339ce12340d14a42a1b04955c1337368
+        git diff --exit-code 8b1f6c0d339ce12340d14a42a1b04955c1337368 HEAD -- . ':(exclude).github/workflows/sonarcloud.yml'
+        echo 'Scoped craft-svg no-default/all-feature tests and lint only. Not full workspace or consumer certification.'
+        cargo fmt -p craft-svg -- --check
+        cargo test --locked -p craft-svg --no-default-features
+        cargo test --locked -p craft-svg --all-features
+        cargo clippy --locked -p craft-svg --all-targets --all-features -- -D warnings
