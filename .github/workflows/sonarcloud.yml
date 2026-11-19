@@ -1,16 +1,22 @@
-name: BMP density exploratory diagnostic (not a gate)
+name: BMP affected-crate exploratory diagnostic (not a gate)
 on:
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: bmp-density-exploratory-7fea38b2
+  group: bmp-affected-crate-exploratory-7fea38b2
   cancel-in-progress: false
 jobs:
   diagnostic:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
+      CARGO_BUILD_JOBS: '2'
+      RUST_TEST_THREADS: '2'
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
     steps:
@@ -33,7 +39,7 @@ jobs:
           rustc --version
       - name: Package formatting
         run: cargo fmt --check -p craft-image-codecs
-      - name: BMP unit and integration regressions
-        run: cargo test --locked -p craft-image-codecs bmp
-      - name: Package production lint
-        run: cargo clippy --locked -p craft-image-codecs --lib -- -D warnings
+      - name: Unfiltered affected-crate tests and doctests
+        run: cargo test --locked -p craft-image-codecs
+      - name: Affected-crate all-target lint
+        run: cargo clippy --locked -p craft-image-codecs --all-targets -- -D warnings
