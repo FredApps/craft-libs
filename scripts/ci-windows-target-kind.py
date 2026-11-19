@@ -45,8 +45,8 @@ def baseline(config):
             capture["metadata_member"] != "target/nextest/cargo-metadata.json"):
         raise ValueError("wrong artifact capture")
     inventory_bytes = (json.dumps(data["inventory"], sort_keys=True) + "\n").encode("utf-8")
-    if hashlib.sha256(inventory_bytes).hexdigest() != capture["inventory_sha256"]:
-        raise ValueError("baseline inventory differs from captured artifact digest")
+    if hashlib.sha256(inventory_bytes).hexdigest() != capture["canonical_inventory_sha256"]:
+        raise ValueError("baseline inventory differs from captured canonical digest")
     return data
 
 
