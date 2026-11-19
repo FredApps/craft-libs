@@ -80,6 +80,8 @@ for kind, expression in (("unit", "kind(lib) | kind(proc-macro)"), ("integration
                     raise ValueError("partition case identity changed")
                 if case["filter-match"]["status"] == "matches":
                     selected[key] = case["ignored"]
+        if any(selected.values()):
+            raise ValueError("ignored fixture case unexpectedly selected for execution")
         if not selected.keys() <= views[kind].keys() or union.keys() & selected.keys():
             raise ValueError("partition overlap or wrong logical kind")
         union.update(selected)
@@ -90,10 +92,13 @@ for kind, expression in (("unit", "kind(lib) | kind(proc-macro)"), ("integration
         subprocess.run(["cargo", "nextest", "run", *args, "--no-tests", "fail" if runnable else "pass"], check=True, env=env, timeout=30)
         verify_bytes()
         proofs.append({"kind": kind, "shard": shard, "selected": selected, "runtime_success": True, "archive_digest": archive_digest})
-    if union != views[kind]:
-        raise ValueError("logical partition union lost cases or ignored semantics")
+    # Default nextest filtering excludes ignored cases from runnable partitions.
+    # Keep every ignored case in full inventory/views, but never execute it.
+    expected_runnable = {key: ignored for key, ignored in views[kind].items() if not ignored}
+    if union != expected_runnable:
+        raise ValueError(f"logical runnable partition union mismatch: missing={sorted(expected_runnable.keys() - union.keys())} extra={sorted(union.keys() - expected_runnable.keys())}")
 if len(proofs) != 16 or len({(p["kind"], p["shard"]) for p in proofs}) != 16:
     raise ValueError("missing original partition proofs")
-c.write("combined-fixture-proofs.json", {"config": config, "full_cases": full_cases, "proofs": proofs})
+c.write("combined-fixture-proofs.json", {"config": config, "full_cases": full_cases, "ignored_cases": [key for key, ignored in full_cases.items() if ignored], "proofs": proofs})
 print("COMBINED_TINY_EXACT_UNION", config, len(actual), len(full_cases), "ignored", sum(full_cases.values()), "partitions", len(proofs))
 print("NO_APPLICATION_OR_PRINTER_EXECUTION_NO_COMPLETE_GATE_OR_TIMING_PROOF")
