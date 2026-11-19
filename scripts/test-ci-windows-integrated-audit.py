@@ -23,8 +23,8 @@ def stream(*records):
     return [json.dumps(r) for r in records] + [json.dumps({"reason": "build-finished", "success": True})]
 
 class Tests(unittest.TestCase):
-    def test_enabled_names_only(self):
-        self.assertEqual(audit.selectors(metadata(), "integration"), ["--test", "yes"])
+    def test_integration_builds_all_tests_then_filters_archive(self):
+        self.assertEqual(audit.selectors(metadata(), "integration"), ["--tests", "-E", "kind(test) | kind(example)"])
         self.assertEqual(audit.selectors(metadata(), "unit"), ["--lib"])
     def test_disabled_collision(self):
         data = metadata()
@@ -37,8 +37,41 @@ class Tests(unittest.TestCase):
         data["resolve"]["nodes"].append({"id": "q", "features": []})
         data["packages"].append({"id": "q", "name": "q", "targets": [
             {"name": "yes", "kind": ["test"], "test": True, "required-features": ["off"]}]})
-        with self.assertRaisesRegex(ValueError, "disabled target name collision"):
-            audit.selectors(data, "integration")
+        self.assertEqual(audit.selectors(data, "integration"),
+                         ["--tests", "-E", "kind(test) | kind(example)"])
+        self.assertEqual([(t["package"], t["name"]) for t in audit.configured_targets(data)
+                          if t["kind"] == "test"], [("p", "yes")])
+
+    def test_disabled_example_collision_preserves_exact_eligible_inventory(self):
+        data = metadata()
+        data["packages"][0]["targets"].append(
+            {"name": "demo", "kind": ["example"], "test": True})
+        data["workspace_members"].append("q")
+        data["resolve"]["nodes"].append({"id": "q", "features": []})
+        data["packages"].append({"id": "q", "name": "q", "targets": [
+            {"name": "demo", "kind": ["example"], "test": False}]})
+        self.assertEqual(audit.selectors(data, "integration"),
+                         ["--tests", "-E", "kind(test) | kind(example)"])
+        expected = {(t["package"], t["name"]) for t in audit.configured_targets(data)
+                    if t["kind"] == "example"}
+        self.assertEqual(expected, {("p", "demo")})
+
+    def test_integration_rejects_extra_unit_or_disabled_binary(self):
+        data = metadata()
+        unit = artifact()
+        enabled = artifact()
+        enabled["target"] = {"name": "yes", "kind": ["test"]}
+        enabled["executable"] = "target/debug/yes.exe"
+        enabled["filenames"] = [enabled["executable"]]
+        units = audit.compiler_units(stream(unit, enabled))
+        inventory = {"rust-suites": {"p::yes": {
+            "package-name": "p", "binary-name": "yes", "kind": "test"}}}
+        audit.verify_binaries(data, inventory, "integration", units)
+        for binary, kind in [("p", "lib"), ("no", "test")]:
+            inventory["rust-suites"]["extra"] = {
+                "package-name": "p", "binary-name": binary, "kind": kind}
+            with self.assertRaisesRegex(ValueError, "inventory"):
+                audit.verify_binaries(data, inventory, "integration", units)
 
     def test_bad_name_and_kind(self):
         for name, kind in [("$(bad)", "test"), ("new", "bin")]:

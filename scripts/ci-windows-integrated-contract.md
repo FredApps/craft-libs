@@ -29,4 +29,23 @@ Reconciliation rejects proofs lacking runtime_success. This is supplemental, not
 a replacement for workflow job results. The eventual workflow MUST depend on
 every producer and every runtime consumer and require all their results success.
 Never run acceptance with always() alone or accept proof upload/presence as a pass.
-A source-reviewed workflow enforcing those dependencies is still to be written.
+The diagnostic workflow enforces these dependencies; its regression test checks
+them. A production replacement remains unvalidated and is not activated.
+
+
+## Source-only collision repair (not validated or activated)
+Integration compilation uses the same full workspace and feature arguments with
+Cargo `--tests`, then nextest's archive filter `kind(test) | kind(example)`.
+Cargo's test=true/required-features selection handles same-name disabled targets
+without per-package resolution or enabling extra features. It also compiles unit
+binaries; they are excluded from the archive, not necessarily from compilation.
+The exact configured-target archive check remains mandatory and rejects any
+extra unit/disabled binary or missing expected integration/example binary.
+Timing must be measured anew; prior target-specific compile timings do not prove
+this full-build filtering path is under30minutes end-to-end.
+
+Cargo --tests semantics: https://doc.rust-lang.org/cargo/commands/cargo-test.html
+Pinned nextest archive filtering occurs after build_binary_list in
+https://github.com/nextest-rs/nextest/blob/d225b1daf362c1ca8e5e048132618c1a81c57a28/cargo-nextest/src/dispatch/core/archive.rs
+This repair does not establish complete compiler-graph or executable-byte
+identity, and does not cover docs, lint or ordinary non-test example linking.

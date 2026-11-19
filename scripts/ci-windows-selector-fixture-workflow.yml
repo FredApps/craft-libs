@@ -1,0 +1,24 @@
+# Inactive source for a separate tiny selector semantics diagnostic, not an application gate.
+name: Archive selector fixture
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fixture:
+    name: Selector ${{ matrix.config }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [default, all-features]
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@7d4597abb21f0a8fa959395b0789e79fa19849ca
+    with:
+      os: '["windows-latest"]'
+      select-os: '[]'
+      timeout-minutes: 10
+      cache-version: archive-selector-fixture-v1
+      tools: cargo-nextest@0.9.150
+      targets: ""
+      craft-fonts-ref: ""
+      require-craft-fonts: false
+      command: bash scripts/ci-windows-selector-fixture.sh ${{ matrix.config }}

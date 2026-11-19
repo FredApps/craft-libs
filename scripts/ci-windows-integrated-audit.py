@@ -61,21 +61,13 @@ def selectors(metadata, kind):
         raise ValueError("empty target kind")
     if kind == "unit":
         return ["--lib"]
-    # Cargo name selectors apply across all selected workspace packages. A disabled
-    # same-name target must fail rather than silently enabling its features.
-    members = set(metadata["workspace_members"])
-    eligible_keys = {(t["package_id"], t["name"], t["kind"]) for t in eligible}
-    for package in metadata["packages"]:
-        if package["id"] not in members:
-            continue
-        for target in package["targets"]:
-            for target_kind in KINDS[kind]:
-                if target_kind in target["kind"] and target["name"] in names.get(target_kind, set()):
-                    if (package["id"], target["name"], target_kind) not in eligible_keys:
-                        raise ValueError("disabled target name collision")
-    return [arg for target_kind in ("test", "example")
-            for name in sorted(names.get(target_kind, set()))
-            for arg in ("--" + target_kind, name)]
+    # Cargo's --tests respects test=true and required-features without naming
+    # same-name targets across packages. Keep the complete workspace selected:
+    # per-package builds could change feature unification. nextest 0.9.150 applies
+    # this archive filter AFTER building, so unit binaries may be compiled again
+    # but only integration/test-enabled example binaries enter this archive.
+    # verify_binaries still requires the exact configured target inventory.
+    return ["--tests", "-E", "kind(test) | kind(example)"]
 
 
 def compiler_units(lines):

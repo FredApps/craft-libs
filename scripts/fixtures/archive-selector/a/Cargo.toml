@@ -1,0 +1,10 @@
+[package]
+name = "selector-a"
+version = "0.1.0"
+edition = "2024"
+[[example]]
+name = "demo"
+test = true
+[[example]]
+name = "off"
+test = false
