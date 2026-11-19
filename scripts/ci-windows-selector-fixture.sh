@@ -11,6 +11,7 @@ cargo metadata --locked --format-version 1 "${features[@]}" > configured-metadat
 python "$scripts/ci-windows-integrated-audit.py" selectors configured-metadata.json integration > selectors.txt
 mapfile -t selection < selectors.txt
 cargo nextest archive --workspace "${features[@]}" "${selection[@]}" --locked --cargo-message-format json --archive-file tests.tar.zst > compiler-artifacts.jsonl
+mkdir "$PWD/extracted"
 cargo nextest list --archive-file tests.tar.zst --extract-to "$PWD/extracted" --message-format json > inventory.json
 python "$scripts/test-ci-windows-selector-fixture.py" "$1"
 # Mirror consumer extraction semantics, then verify the executed bytes again.
