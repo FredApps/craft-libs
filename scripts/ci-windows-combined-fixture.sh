@@ -4,6 +4,7 @@ set -euo pipefail
 case "${1:-}" in default) features=() ;; all-features) features=(--all-features) ;; *) exit 2 ;; esac
 scripts=$(cd "$(dirname "$0")" && pwd)
 python "$scripts/test-ci-windows-integrated-audit.py"
+python "$scripts/test-ci-windows-combined-audit.py"
 cd "$scripts/fixtures/combined-selector"
 cargo generate-lockfile
 cargo metadata --locked --format-version 1 "${features[@]}" > configured-metadata.json
