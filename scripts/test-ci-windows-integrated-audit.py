@@ -74,6 +74,29 @@ class Tests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "inventory"):
             audit.verify_binaries(metadata(), inventory, "unit", audit.compiler_units(stream(artifact())))
 
+    def test_inactive_workflow_requires_all_success_and_same_run_artifacts(self):
+        text = Path(__file__).with_name("ci-windows-integrated-workflow.yml").read_text()
+        self.assertNotIn("always()", text)
+        self.assertNotIn("continue-on-error:", text)
+        self.assertNotIn("pull_request:", text)
+        self.assertNotIn("run-id:", text.replace("# No run-id override:", "# Same-run download:"))
+        expected_needs = []
+        for config in ("default", "all-features"):
+            for kind in ("unit", "integration"):
+                suffix = config.replace("-", "_") + "_" + kind
+                producer, consumer = "archive_" + suffix, "execute_" + suffix
+                expected_needs.extend([producer, consumer])
+                self.assertIn("    needs: " + producer + "\n", text)
+                self.assertIn("needs." + producer + ".result == 'success'", text)
+                self.assertIn("needs." + consumer + ".result == 'success'", text)
+                self.assertIn("command: bash scripts/ci-windows-integrated-producer.sh " + config + " " + kind, text)
+                archive = "archive-${{ github.run_id }}-${{ github.run_attempt }}-" + config + "-" + kind
+                self.assertIn("artifact-name: " + archive + "\n", text)
+                self.assertIn("name: " + archive + "-windows-latest\n", text)
+                self.assertIn("name: proof-" + config + "-" + kind + "-${{ matrix.shard }}", text)
+        self.assertIn("needs: [" + ", ".join(expected_needs) + "]", text)
+        self.assertEqual(text.count("shard: [1, 2, 3, 4, 5, 6, 7, 8]"), 4)
+
     def test_runtime_union_rejects_duplicates_missing_and_wrong_identity(self):
         provenance = {"sha": "abc", "run": "1", "attempt": "1"}
         expected = {str(i): i == 3 for i in range(8)}
