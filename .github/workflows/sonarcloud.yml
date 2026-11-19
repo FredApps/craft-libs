@@ -1,27 +1,39 @@
-name: SonarCloud
-
+name: BMP density exploratory diagnostic (not a gate)
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened]
-
+  workflow_dispatch:
 permissions:
   contents: read
-
 concurrency:
-  group: sonarcloud-${{ github.ref }}
-  # A push to main is the run that publishes coverage; superseded runs there would never finish.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
-
+  group: bmp-density-exploratory-7fea38b2
+  cancel-in-progress: false
 jobs:
-  sonarcloud:
-    # Track shared CI improvements on main.
-    uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
-    with:
-      pdf-test-fonts: true
-      # The codec and format code behind features that are off by default. Without these the
-      # coverage build never compiles it, and new code there reads as untested.
-      cargo-features: >-
-        craft-image-codecs/avif,craft-image-codecs/avif-decode,craft-video/dnx,craft-video/vp8,craft-video/prores,craft-video/h264,craft-video/hevc,craft-video/vp9,craft-video/av1,craft-video/threads,craft-audio/decode,craft-audio/encode,craft-audio/peaks,craft-audio/rayon,craft-audio/serde,craft-media/matroska,craft-media/ogg,craft-media/bitstream,craft-media/serde,craft-mesh/stl,craft-mesh/obj,craft-mesh/ply,craft-mesh/gltf,craft-metafile/write,craft-image-codecs/sgi,craft-image-codecs/sunraster,craft-jsonrpc/async-lines
-    secrets: inherit
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - name: Checkout exact reviewed source
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: FredApps/craft-libs
+          ref: 7fea38b2c5ab3e0fb3ddf85a4866ee369869ff7f
+          persist-credentials: false
+      - name: Install stable Rust
+        uses: step-security/dtolnay-rust-toolchain@v1.0.0
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: Verify source and disclose scope
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = 7fea38b2c5ab3e0fb3ddf85a4866ee369869ff7f
+          echo 'Exploratory package diagnostic. Cold runtime unknown; 20 minute hard cap. Not full workspace, Sonar or merge-gate certification.' >> "$GITHUB_STEP_SUMMARY"
+          rustc --version
+      - name: Package formatting
+        run: cargo fmt --check -p craft-image-codecs
+      - name: BMP unit and integration regressions
+        run: cargo test --locked -p craft-image-codecs bmp
+      - name: Package production lint
+        run: cargo clippy --locked -p craft-image-codecs --lib -- -D warnings
