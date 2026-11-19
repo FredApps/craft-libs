@@ -7,11 +7,12 @@ case "${2:-}" in unit|integration) ;; *) exit 2 ;; esac
 mkdir pilot-bundle
 python scripts/test-ci-windows-archive-contract.py
 python scripts/test-ci-windows-integrated-audit.py
+powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
+python scripts/ci-windows-parity.py prebuild "$1"
 # Unlike nextest's unconditional --all-features metadata, this uses the actual configuration.
 cargo metadata --locked --format-version 1 --filter-platform x86_64-pc-windows-msvc "${features[@]}" > pilot-bundle/configured-metadata.json
 python scripts/ci-windows-integrated-audit.py selectors pilot-bundle/configured-metadata.json "$2" > pilot-selectors.txt
 mapfile -t targets < pilot-selectors.txt
-powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
 printf 'PRODUCER_BUILD_START %s config=%s kind=%s\n' "$(date -u +%FT%TZ)" "$1" "$2"
 # The forwarded stream includes cached compiler-artifact records. No second compile is needed.
 cargo nextest archive --workspace "${features[@]}" "${targets[@]}" --locked --cargo-message-format json --archive-file pilot-bundle/tests.tar.zst > pilot-bundle/compiler-artifacts.jsonl

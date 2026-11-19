@@ -63,3 +63,22 @@ finally:
     binary.write_bytes(original)
 c.verify_executables()
 print("CONSUMER_TAMPER_REJECTED", config)
+
+# Controlled fixture-only parity adapter. Resource files are tiny synthetic data;
+# printer prerequisites are mocked. Never application/real-queue evidence.
+import os
+from unittest.mock import patch
+parity = c.parity
+resources = {}
+for label in ("corpus", "source-corpus", "pdf-fonts", "craft-fonts", "craft-i18n"):
+    root = Path("mock-parity-resources") / label
+    root.mkdir(parents=True)
+    (root / "fixture").write_bytes(label.encode())
+    resources[label] = root.resolve()
+provenance = {"sha": os.environ["GITHUB_SHA"], "run": os.environ["GITHUB_RUN_ID"],
+              "attempt": os.environ["GITHUB_RUN_ATTEMPT"], "config": config}
+with patch.object(parity.subprocess, "check_output", return_value="PRINT_PREREQUISITES_OK\n"):
+    parity_manifest = parity.manifest(Path.cwd(), Path.cwd() / "mock-cargo-home", resources,
+        {"CRAFT_PRINT_REQUIRE_QUEUE": "1", "CRAFT_FONTS_REQUIRED": "1", "CRAFT_I18N_REQUIRED": "1"}, provenance)
+c.write(c.BUNDLE / "parity-manifest.json", parity_manifest)
+print("MOCK_PARITY_ATTACHED_TO_TINY_PROOF_NO_APPLICATION_QUEUE_EVIDENCE")

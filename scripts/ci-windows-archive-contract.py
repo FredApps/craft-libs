@@ -1,5 +1,6 @@
 """Fork-only archive provenance and inventory contract. No workflow text execution."""
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -9,6 +10,10 @@ import zipfile
 import subprocess
 import sys
 import time
+
+spec = importlib.util.spec_from_file_location("parity", Path(__file__).with_name("ci-windows-parity.py"))
+parity = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(parity)
 
 BUNDLE = Path("pilot-bundle")
 CONFIGS = ("default", "all-features")
@@ -248,12 +253,16 @@ def proof(config, shard, target_kind=None):
         raise ValueError("invalid shard membership")
     if target_kind is not None and target_kind not in ("unit", "integration"):
         raise ValueError("invalid proof target kind")
+    parity_manifest = read(BUNDLE / "parity-manifest.json") if target_kind is not None else None
+    if parity_manifest is not None:
+        parity.validate_manifest(parity_manifest)
     Path("pilot-proof").mkdir()
     write(Path("pilot-proof") / "proof.json", {
         "config": config, "shard": shard, "sha": os.environ["GITHUB_SHA"],
         "run": os.environ["GITHUB_RUN_ID"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"],
         "expected": expected, "selected": selected,
         "target_kind": target_kind,
+        "parity_digest": parity.manifest_digest(parity_manifest) if parity_manifest is not None else None,
         "runtime_success": True,  # Caller must invoke only after successful runtime and lockfile check.
     })
 
@@ -262,10 +271,12 @@ def proof(config, shard, target_kind=None):
         audit = {"metadata_digest": digest(BUNDLE / "configured-metadata.json"),
                  "units_digest": digest(BUNDLE / "compiler-units.json"),
                  "targets_digest": digest(BUNDLE / "configured-targets.json"),
-                 "executables_digest": digest(BUNDLE / "executable-digests.json")}
+                 "executables_digest": digest(BUNDLE / "executable-digests.json"),
+                 "parity_file_digest": digest(BUNDLE / "parity-manifest.json"),
+                 "inventory_digest": digest(BUNDLE / "inventory-normalized.json")}
         write(Path("pilot-proof") / "audit-digests.json", audit)
         if shard == "1":
-            for name in ("compiler-units.json", "configured-targets.json", "executable-digests.json"):
+            for name in ("compiler-units.json", "configured-targets.json", "executable-digests.json", "parity-manifest.json", "inventory-normalized.json"):
                 shutil.copyfile(BUNDLE / name, Path("pilot-proof") / name)
 
 

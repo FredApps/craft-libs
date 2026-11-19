@@ -8,17 +8,18 @@ import json
 import os
 from pathlib import Path
 import stat
+import sys
 import subprocess
 import time
 
-FLAGS = ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTDOCFLAGS", "CARGO_BUILD_TARGET",
+FLAGS = ("CARGO_INCREMENTAL", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTDOCFLAGS", "CARGO_BUILD_TARGET",
          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_ENCODED_RUSTDOCFLAGS", "CARGO_BUILD_RUSTFLAGS",
          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS")
 PROFILES = tuple("CARGO_PROFILE_" + profile + "_" + setting
                  for profile in ("DEV", "TEST", "RELEASE", "DEV_BUILD_OVERRIDE", "TEST_BUILD_OVERRIDE", "RELEASE_BUILD_OVERRIDE")
                  for setting in ("DEBUG", "STRIP", "OPT_LEVEL", "OVERFLOW_CHECKS", "LTO", "CODEGEN_UNITS", "PANIC", "INCREMENTAL", "DEBUG_ASSERTIONS", "RPATH", "SPLIT_DEBUGINFO"))
 SAMPLES = ("CRAFT_HOSTILE_DIVISOR", "PROPTEST_CASES", "CRAFT_MEDIA_HOSTILE_MULT")
-RUNTIME = ("CRAFT_PRINT_REQUIRE_QUEUE", "CRAFT_FONTS_REQUIRED", "WGPU_BACKEND")
+RUNTIME = ("CRAFT_PRINT_REQUIRE_QUEUE", "CRAFT_FONTS_REQUIRED", "CRAFT_I18N_REQUIRED", "WGPU_BACKEND")
 MAX_FILES = 100000
 MAX_BYTES = 16 * 1024 ** 3
 MAX_SECONDS = 60
@@ -56,7 +57,7 @@ def no_links(path):
             raise ValueError("linked parity input")
 
 
-def resource_identity(root, budget=None):
+def resource_identity(root, budget=None, checkout_content=False):
     budget = budget or Budget()
     root = Path(root).absolute()
     no_links(root)
@@ -74,7 +75,13 @@ def resource_identity(root, budget=None):
             raise ValueError("resource scan budget exceeded")
         # Resource roots must be content-only, not checkout admin directories.
         if ".git" in directories or ".git" in filenames:
-            raise ValueError("resource root contains checkout administration")
+            # Only the known checkout root's directory may be excluded. Files,
+            # nested repositories, symlinks and junctions fail closed.
+            if checkout_content and Path(directory) == root and ".git" in directories:
+                no_links(root / ".git")
+                directories.remove(".git")
+            else:
+                raise ValueError("resource root contains checkout administration")
         for name in directories:
             no_links(Path(directory) / name)
         for name in filenames:
@@ -166,12 +173,12 @@ def runtime_inputs(resources, env, budget=None):
     budget = budget or Budget()
     if any(name in env for name in SAMPLES):
         raise ValueError("Full-validation sample override present")
-    if env.get("CRAFT_PRINT_REQUIRE_QUEUE") != "1" or env.get("CRAFT_FONTS_REQUIRED") != "1":
+    if env.get("CRAFT_PRINT_REQUIRE_QUEUE") != "1" or env.get("CRAFT_FONTS_REQUIRED") != "1" or env.get("CRAFT_I18N_REQUIRED") != "1":
         raise ValueError("required Windows runtime contract disabled")
     if set(resources) != {"corpus", "source-corpus", "pdf-fonts", "craft-fonts", "craft-i18n"}:
         raise ValueError("missing or unknown runtime resource identity")
     return {"environment": env_identity(SAMPLES + RUNTIME, env),
-            "resources": {label: resource_identity(root, budget) for label, root in resources.items()}}
+            "resources": {label: resource_identity(root, budget, checkout_content=label in ("craft-fonts", "craft-i18n")) for label, root in resources.items()}}
 
 
 def printer_prerequisites(budget=None):
@@ -253,7 +260,7 @@ def validate_manifest(value):
     exact(value["runtime"], ("environment", "resources"), "runtime fields")
     exact(value["runtime"]["environment"], SAMPLES + RUNTIME, "runtime environment")
     runtime = value["runtime"]["environment"]
-    if any(runtime[name] is not None for name in SAMPLES) or any(runtime[name] != sha(b"1") for name in ("CRAFT_PRINT_REQUIRE_QUEUE", "CRAFT_FONTS_REQUIRED")):
+    if any(runtime[name] is not None for name in SAMPLES) or any(runtime[name] != sha(b"1") for name in ("CRAFT_PRINT_REQUIRE_QUEUE", "CRAFT_FONTS_REQUIRED", "CRAFT_I18N_REQUIRED")):
         raise ValueError("disabled parity runtime requirements")
     for item in runtime.values():
         digest(item, nullable=True)
@@ -291,3 +298,52 @@ def reconcile_parity(producer_manifest, proofs, queue_case):
     if count != 1:
         raise ValueError("missing or repeated queue execution proof")
     return expected
+
+
+def collect(config):
+    if os.environ.get("RUNNER_OS") != "Windows" or config not in ("default", "all-features"):
+        raise ValueError("unexpected parity platform/config")
+    workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+    if Path.cwd().resolve() != workspace:
+        raise ValueError("parity capture outside workspace")
+    resources = {"corpus": workspace / "corpus",
+                 "source-corpus": workspace / ".test-inputs/photocraft/corpus",
+                 "pdf-fonts": Path(os.environ["RUNNER_TEMP"]) / "craft-pdf-test-fonts",
+                 "craft-fonts": workspace / "craft-fonts", "craft-i18n": workspace / "craft-i18n"}
+    for variable, label in (("CRAFT_PSD_CORPUS", "source-corpus"), ("CRAFT_PDF_TEST_FONT_DIR", "pdf-fonts"),
+                            ("CRAFT_FONTS_DIR", "craft-fonts"), ("CRAFT_I18N_DIR", "craft-i18n")):
+        if Path(os.environ[variable]).resolve(strict=True) != resources[label].resolve(strict=True):
+            raise ValueError("runtime resource path differs from contract")
+    provenance = {"sha": os.environ["GITHUB_SHA"], "run": os.environ["GITHUB_RUN_ID"],
+                  "attempt": os.environ["GITHUB_RUN_ATTEMPT"], "config": config}
+    cargo_home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
+    return manifest(workspace, cargo_home, resources, os.environ, provenance)
+
+
+
+def verify_build_snapshot(before, after):
+    validate_manifest(before)
+    validate_manifest(after)
+    if before != after:
+        raise ValueError("producer parity inputs changed across build")
+    return after
+
+
+def verify_current(config):
+    expected = json.loads(Path("pilot-bundle/parity-manifest.json").read_text(encoding="utf-8"))
+    validate_manifest(expected)
+    if collect(config) != expected:
+        raise ValueError("consumer compiler/resource/runtime parity differs")
+    print("PARITY_INPUTS_IDENTICAL", config)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "prebuild":
+        value = collect(sys.argv[2])
+        # Exclusive create prevents silently replacing the pre-build snapshot.
+        with Path("pilot-bundle/parity-prebuild.json").open("x", encoding="utf-8") as stream:
+            json.dump(value, stream, sort_keys=True)
+    elif len(sys.argv) == 3 and sys.argv[1] == "verify":
+        verify_current(sys.argv[2])
+    else:
+        raise SystemExit("unknown fixed parity command")

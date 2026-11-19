@@ -35,13 +35,27 @@ class Tests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "administration"):
                 p.resource_identity(root)
 
+    def test_checkout_admin_exclusion_is_root_only_and_explicit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "fixture").write_bytes(b"content")
+            before = p.resource_identity(root, checkout_content=True)
+            (root / ".git").mkdir()
+            (root / ".git/private-admin").write_bytes(b"not resource content")
+            self.assertEqual(before, p.resource_identity(root, checkout_content=True))
+            with self.assertRaisesRegex(ValueError, "administration"):
+                p.resource_identity(root)
+            (root / "nested/.git").mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "administration"):
+                p.resource_identity(root, checkout_content=True)
+
     def test_required_configuration_and_full_sample_fail_closed(self):
         with self.assertRaisesRegex(ValueError, "sample"):
             p.runtime_inputs({}, {"PROPTEST_CASES": ""})
         with self.assertRaisesRegex(ValueError, "disabled"):
             p.runtime_inputs({}, {})
         with self.assertRaisesRegex(ValueError, "resource"):
-            p.runtime_inputs({}, {"CRAFT_PRINT_REQUIRE_QUEUE": "1", "CRAFT_FONTS_REQUIRED": "1"})
+            p.runtime_inputs({}, {"CRAFT_PRINT_REQUIRE_QUEUE": "1", "CRAFT_FONTS_REQUIRED": "1", "CRAFT_I18N_REQUIRED": "1"})
 
     def test_compiler_flags_and_config_are_bound(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -143,7 +157,7 @@ class Tests(unittest.TestCase):
                 directory.mkdir()
                 (directory / "fixture").write_bytes(label.encode())
                 resources[label] = directory
-            env = {"CRAFT_PRINT_REQUIRE_QUEUE": "1", "CRAFT_FONTS_REQUIRED": "1"}
+            env = {"CRAFT_PRINT_REQUIRE_QUEUE": "1", "CRAFT_FONTS_REQUIRED": "1", "CRAFT_I18N_REQUIRED": "1"}
             provenance = {"sha": "fixture-sha", "run": "fixture-run", "attempt": "1", "config": "default"}
             inventory = {"rust-suites": {"fixture-print": {"package-name": "craft-print", "status": "listed",
                 "testcases": {"tests::windows_jobs_reach_the_spooler": {"ignored": False, "filter-match": {"status": "matches"}}}}}}
@@ -172,7 +186,7 @@ class Tests(unittest.TestCase):
                     "ancestor-0-config": None, "ancestor-0-config.toml": None},
                     "environment": p.env_identity(p.FLAGS + p.PROFILES, {})},
                 "runtime": {"environment": p.env_identity(p.SAMPLES + p.RUNTIME,
-                    {"CRAFT_PRINT_REQUIRE_QUEUE": "1", "CRAFT_FONTS_REQUIRED": "1"}),
+                    {"CRAFT_PRINT_REQUIRE_QUEUE": "1", "CRAFT_FONTS_REQUIRED": "1", "CRAFT_I18N_REQUIRED": "1"}),
                     "resources": {name: {"files": 1, "bytes": 1, "tree_sha256": h}
                         for name in ("corpus", "source-corpus", "pdf-fonts", "craft-fonts", "craft-i18n")}},
                 "printer_prerequisites": {"spooler": True, "generic_driver": True, "lpt1": True}}
@@ -201,6 +215,20 @@ class Tests(unittest.TestCase):
             proof = {**provenance, "runtime_success": True, "parity_digest": p.manifest_digest(item), "selected": {"queue": False}}
             with self.assertRaises(ValueError):
                 p.reconcile_parity(item, [proof], "queue")
+
+    def test_prebuild_snapshot_and_incremental_bound(self):
+        self.assertIn("CARGO_INCREMENTAL", p.FLAGS)
+        provenance = {"sha": "sha", "run": "run", "attempt": "1", "config": "default"}
+        before = self.complete_manifest(provenance)
+        p.verify_build_snapshot(before, copy.deepcopy(before))
+        after = copy.deepcopy(before)
+        after["compiler"]["environment"]["CARGO_INCREMENTAL"] = p.sha(b"1")
+        with self.assertRaisesRegex(ValueError, "across build"):
+            p.verify_build_snapshot(before, after)
+        after = copy.deepcopy(before)
+        after["runtime"]["resources"]["corpus"]["tree_sha256"] = p.sha(b"changed")
+        with self.assertRaisesRegex(ValueError, "across build"):
+            p.verify_build_snapshot(before, after)
 
     def test_manifest_and_successful_queue_bound_to_reconciliation(self):
         provenance = {"sha": "sha", "run": "run", "attempt": "1", "config": "default"}

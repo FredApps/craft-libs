@@ -171,6 +171,11 @@ def capture(config, kind):
     contract.write("pilot-bundle/executable-digests.json", executable_digests)
     contract.write("pilot-bundle/compiler-units.json", units)
     contract.write("pilot-bundle/configured-targets.json", configured_targets(metadata))
+    parity_manifest = contract.parity.verify_build_snapshot(
+        contract.read("pilot-bundle/parity-prebuild.json"), contract.parity.collect(config))
+    if kind == "unit":
+        contract.parity.require_queue_case(inventory)
+    contract.write("pilot-bundle/parity-manifest.json", parity_manifest)
     contract.prepare(config)
     manifest = contract.read("pilot-bundle/manifest.json")
     manifest["identity"]["target_kind"] = kind
@@ -201,17 +206,27 @@ def reconcile_group(proofs, config, kind, provenance):
     return union
 
 
+def require_job_success(needs):
+    expected = {phase + "_" + config.replace("-", "_") + "_" + kind
+                for phase in ("archive", "execute") for config in contract.CONFIGS for kind in KINDS}
+    if set(needs) != expected or any(needs[key].get("result") != "success" for key in expected):
+        raise ValueError("missing or unsuccessful workflow dependency")
+
+
 def reconcile():
     import os
+    require_job_success(json.loads(os.environ["PARITY_NEEDS_JSON"]))
     provenance = {"sha": os.environ["GITHUB_SHA"], "run": os.environ["GITHUB_RUN_ID"],
                   "attempt": os.environ["GITHUB_RUN_ATTEMPT"]}
     for config in contract.CONFIGS:
         all_cases = {}
         group_audits = {}
+        config_proofs = []
         for kind in KINDS:
             roots = [Path("proofs") / f"proof-{config}-{kind}-{shard}" for shard in range(1, 9)]
             proofs = [contract.read(root / "proof.json") for root in roots]
             union = reconcile_group(proofs, config, kind, provenance)
+            config_proofs.extend(proofs)
             if all_cases.keys() & union.keys():
                 raise ValueError("duplicate case across target kinds")
             all_cases.update(union)
@@ -220,17 +235,28 @@ def reconcile():
                 raise ValueError("shards used different producer audits")
             for filename, key in (("compiler-units.json", "units_digest"),
                                       ("configured-targets.json", "targets_digest"),
-                                      ("executable-digests.json", "executables_digest")):
+                                      ("executable-digests.json", "executables_digest"),
+                                      ("parity-manifest.json", "parity_file_digest"),
+                                      ("inventory-normalized.json", "inventory_digest")):
                 if contract.digest(roots[0] / filename) != digests[0][key]:
                     raise ValueError("producer audit digest differs")
             group_audits[kind] = {
                 "digests": digests[0], "units": contract.read(roots[0] / "compiler-units.json"),
                 "targets": contract.read(roots[0] / "configured-targets.json"),
+                "parity": contract.read(roots[0] / "parity-manifest.json"),
+                "inventory": contract.read(roots[0] / "inventory-normalized.json"),
             }
+            if union != contract.cases(group_audits[kind]["inventory"], selected=True):
+                raise ValueError("runtime union differs from producer inventory")
         unit, integration = group_audits["unit"], group_audits["integration"]
         if (unit["digests"]["metadata_digest"] != integration["digests"]["metadata_digest"] or
                 unit["targets"] != integration["targets"]):
             raise ValueError("target kinds used different configured workspace inventories")
+        if unit["parity"] != integration["parity"]:
+            raise ValueError("target kinds used different parity manifests")
+        queue_case = contract.parity.require_queue_case(unit["inventory"])
+        # Successful job conclusions and exact case unions were checked above.
+        contract.parity.reconcile_parity(unit["parity"], config_proofs, queue_case)
         common = shared_library_features(unit["units"], integration["units"])
         print("EXACT_RUNTIME_UNION", config, len(all_cases), "ignored", sum(all_cases.values()))
         print("SHARED_LIBRARY_LABEL_FEATURE_SETS_IDENTICAL", config, common)

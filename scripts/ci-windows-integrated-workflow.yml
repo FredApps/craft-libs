@@ -308,3 +308,5 @@ jobs:
           pattern: proof-*
           path: proofs
       - run: python scripts/ci-windows-integrated-audit.py reconcile
+        env:
+          PARITY_NEEDS_JSON: ${{ toJSON(needs) }}
