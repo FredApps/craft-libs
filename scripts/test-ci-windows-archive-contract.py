@@ -32,6 +32,33 @@ class Tests(unittest.TestCase):
                 c.verify("default")
             cp.assert_not_called()
 
+    def test_nested_manifest_is_hashed(self):
+        root = Path("bundle")
+        (root / "nested").mkdir(parents=True)
+        (root / "manifest.json").write_text("self")
+        (root / "nested/manifest.json").write_text("fixture")
+        self.assertEqual(set(c.files(root)), {"nested/manifest.json"})
+
+    def test_zip_hidden_file_and_unsafe_members(self):
+        Path("pilot-bundle").mkdir()
+        with patch.object(c, "identity", return_value={"sha": "a"}):
+            for member in ("../escape", "corpus/../escape", "C:/escape", "corpus/a:b", "corpus/./bad"):
+                with c.zipfile.ZipFile("pilot-bundle/runtime.zip", "w") as archive:
+                    archive.writestr(member, b"bad")
+                c.write("pilot-bundle/manifest.json", {"identity": {"sha": "a"}, "files": c.files(Path("pilot-bundle"))})
+                with self.assertRaisesRegex(ValueError, "unsafe"):
+                    c.verify("default")
+            with c.zipfile.ZipFile("pilot-bundle/runtime.zip", "w") as archive:
+                archive.writestr("corpus/.hidden-fixture", b"preserved")
+            c.write("pilot-bundle/manifest.json", {"identity": {"sha": "a"}, "files": c.files(Path("pilot-bundle"))})
+            c.verify("default")
+            self.assertEqual(Path("corpus/.hidden-fixture").read_bytes(), b"preserved")
+
+    def test_linked_source_rejected_before_packing(self):
+        Path("corpus").mkdir()
+        with patch.object(Path, "is_symlink", return_value=True):
+            with self.assertRaisesRegex(ValueError, "linked runtime root"):
+                c.prepare("default")
     def fixtures(self):
         expected = {str(i): bool(i % 2) for i in range(1, 9)}
         for config in c.CONFIGS:
