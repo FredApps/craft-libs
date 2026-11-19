@@ -1,5 +1,6 @@
 """Compare target-kind archives with the verified whole-workspace baseline."""
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -25,13 +26,27 @@ def source_tree():
     return result
 
 
+def verify_environment(current, expected):
+    for key in ("rustc", "nextest", "debug", "profile", "hostile_divisor", "proptest_cases", "workspace", "repository", "config"):
+        if current[key] != expected[key]:
+            raise ValueError("baseline environment differs: " + key)
+
 def baseline(config):
     if config not in ("default", "all-features"):
         raise ValueError("invalid feature configuration")
     data = contract.read(Path("scripts/ci-archive-baseline") / (config + ".json"))
     if data["provenance"]["sha"] != BASE_SHA or data["provenance"]["run"] != "44435916108":
         raise ValueError("wrong baseline provenance")
-    return data
+    capture = data["artifact_capture"]
+    expected_id = 14489606674 if config == "default" else 14490376996
+    if (capture["repository"] != "FredApps/craft-libs" or capture["run_id"] != "44435916108" or
+            capture["attempt"] != "1" or capture["artifact_id"] != expected_id or
+            capture["artifact_name"] != "archive-44435916108-1-" + config + "-windows-latest" or
+            capture["metadata_member"] != "target/nextest/cargo-metadata.json"):
+        raise ValueError("wrong artifact capture")
+    inventory_bytes = (json.dumps(data["inventory"], sort_keys=True) + "\n").encode("utf-8")
+    if hashlib.sha256(inventory_bytes).hexdigest() != capture["inventory_sha256"]:
+        raise ValueError("baseline inventory differs from captured artifact digest")    return data
 
 
 def expected_inventory(full, kind):
@@ -59,6 +74,7 @@ def graph(resolve):
 
 def validate(config, kind, phase):
     data = baseline(config)
+    verify_environment(contract.identity(config), data["provenance"])
     if source_tree() != data["source_tree"]:
         raise ValueError("product source differs from baseline")
     expected = expected_inventory(data["inventory"], kind)

@@ -9,6 +9,13 @@ spec.loader.exec_module(audit)
 
 
 class Tests(unittest.TestCase):
+    def test_baseline_environment_changes_fail_closed(self):
+        keys = ("rustc", "nextest", "debug", "profile", "hostile_divisor", "proptest_cases", "workspace", "repository", "config")
+        expected = dict.fromkeys(keys, "same")
+        audit.verify_environment(expected, expected)
+        for key in keys:
+            with self.assertRaisesRegex(ValueError, key):
+                audit.verify_environment(expected | {key: "changed"}, expected)
     def test_target_sets_are_disjoint_and_exhaustive(self):
         suites = {kind: {"kind": kind, "testcases": {"case": {"ignored": kind == "example"}}}
                   for kind in ("lib", "test", "example")}
