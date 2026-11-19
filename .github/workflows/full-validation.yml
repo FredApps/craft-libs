@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         features: [default, all-features]
-    uses: ephraimm/craft-common-actions/.github/workflows/gate.yml@da827200d9a7d3968668364cb1139764389a5047
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@7d4597abb21f0a8fa959395b0789e79fa19849ca
     with:
       os: '["windows-latest"]'
       select-os: '[]'
