@@ -31,6 +31,15 @@ class Tests(unittest.TestCase):
         data["packages"][0]["targets"][2]["name"] = "yes"
         with self.assertRaisesRegex(ValueError, "collision"):
             audit.selectors(data, "integration")
+    def test_cross_package_disabled_collision(self):
+        data = metadata()
+        data["workspace_members"].append("q")
+        data["resolve"]["nodes"].append({"id": "q", "features": []})
+        data["packages"].append({"id": "q", "name": "q", "targets": [
+            {"name": "yes", "kind": ["test"], "test": True, "required-features": ["off"]}]})
+        with self.assertRaisesRegex(ValueError, "disabled target name collision"):
+            audit.selectors(data, "integration")
+
     def test_bad_name_and_kind(self):
         for name, kind in [("$(bad)", "test"), ("new", "bin")]:
             data = metadata()

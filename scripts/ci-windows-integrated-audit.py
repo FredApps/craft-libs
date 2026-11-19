@@ -20,6 +20,7 @@ def configured_targets(metadata):
     members = set(metadata["workspace_members"])
     features = {node["id"]: set(node["features"]) for node in metadata["resolve"]["nodes"]}
     targets = []
+    seen = set()
     for package in metadata["packages"]:
         if package["id"] not in members:
             continue
@@ -28,6 +29,10 @@ def configured_targets(metadata):
                 continue
             if len(target["kind"]) != 1 or target["kind"][0] not in set.union(*KINDS.values()):
                 raise ValueError("unsupported test target kind")
+            key = (package["id"], target["name"], tuple(target["kind"]))
+            if key in seen:
+                raise ValueError("duplicate target identity collision")
+            seen.add(key)
             required = set(target.get("required-features", []))
             if not required.issubset(features[package["id"]]):
                 continue
