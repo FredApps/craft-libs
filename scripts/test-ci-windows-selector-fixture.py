@@ -77,6 +77,7 @@ for label in ("corpus", "source-corpus", "pdf-fonts", "craft-fonts", "craft-i18n
     resources[label] = root.resolve()
 provenance = {"sha": os.environ["GITHUB_SHA"], "run": os.environ["GITHUB_RUN_ID"],
               "attempt": os.environ["GITHUB_RUN_ATTEMPT"], "config": config}
+Path("craft-i18n.rev").write_text("a" * 40)  # Synthetic configured-pin boundary only.
 with patch.object(parity.subprocess, "check_output", return_value="PRINT_PREREQUISITES_OK\n"):
     parity_manifest = parity.manifest(Path.cwd(), Path.cwd() / "mock-cargo-home", resources,
         {"CRAFT_PRINT_REQUIRE_QUEUE": "1", "CRAFT_FONTS_REQUIRED": "1", "CRAFT_I18N_REQUIRED": "1"}, provenance)

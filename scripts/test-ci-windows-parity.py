@@ -13,6 +13,54 @@ p = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(p)
 
 class Tests(unittest.TestCase):
+    def test_collect_optional_pin_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            paths = {"CRAFT_PSD_CORPUS": root / ".test-inputs/photocraft/corpus",
+                     "CRAFT_PDF_TEST_FONT_DIR": root / "temp/craft-pdf-test-fonts",
+                     "CRAFT_FONTS_DIR": root / "craft-fonts"}
+            for path in paths.values():
+                path.mkdir(parents=True)
+            env = {key: str(value) for key, value in paths.items()}
+            env.update(RUNNER_OS="Windows", GITHUB_WORKSPACE=str(root), RUNNER_TEMP=str(root / "temp"),
+                       GITHUB_SHA="a" * 40, GITHUB_RUN_ID="1", GITHUB_RUN_ATTEMPT="1")
+            pin = root / "craft-i18n.rev"
+            with patch.dict(os.environ, env, clear=True), patch.object(Path, "cwd", return_value=root), patch.object(p, "manifest", return_value={}) as capture:
+                p.collect("default")
+                self.assertIsNone(capture.call_args.args[2]["craft-i18n"])
+                pin.write_text("a" * 40)
+                (root / "craft-i18n").mkdir()
+                os.environ["CRAFT_I18N_DIR"] = str(root / "craft-i18n")
+                p.collect("default")
+                self.assertEqual(capture.call_args.args[2]["craft-i18n"], root / "craft-i18n")
+                for value in ("malformed", "a" * 257):
+                    pin.write_text(value)
+                    with self.assertRaises(ValueError):
+                        p.collect("default")
+                pin.unlink()
+                pin.mkdir()
+                with self.assertRaises(ValueError):
+                    p.collect("default")
+                pin.rmdir()
+                # A real dangling junction on Windows requires no symlink privilege.
+                if os.name == "nt":
+                    target = root / "junction-target"
+                    target.mkdir()
+                    subprocess.run(["cmd", "/c", "mklink", "/J", str(pin), str(target)], check=True, capture_output=True)
+                    target.rmdir()
+                else:
+                    pin.symlink_to(root / "missing-target")
+                try:
+                    with self.assertRaisesRegex(ValueError, "linked"):
+                        p.collect("default")
+                    with self.assertRaisesRegex(ValueError, "linked"):
+                        p.file_identity(pin)
+                finally:
+                    if os.name == "nt":
+                        pin.rmdir()
+                    else:
+                        pin.unlink()
+
     def test_fixed_env_preserves_absence_without_disclosing_value(self):
         absent = p.env_identity(("RUSTFLAGS",), {})
         empty = p.env_identity(("RUSTFLAGS",), {"RUSTFLAGS": "", "SECRET": "never"})
@@ -151,6 +199,7 @@ class Tests(unittest.TestCase):
             root = Path(tmp)
             (root / "Cargo.lock").write_text("fixture lock")
             (root / "Cargo.toml").write_text("fixture manifest")
+            (root / "craft-i18n.rev").write_text("a" * 40)
             resources = {}
             for label in ("corpus", "source-corpus", "pdf-fonts", "craft-fonts", "craft-i18n"):
                 directory = root / label
@@ -181,7 +230,7 @@ class Tests(unittest.TestCase):
     def complete_manifest(self, provenance):
         h = p.sha(b"fixture")
         return {"schema": 1, "provenance": provenance,
-                "compiler": {"inputs": {"workspace-lock": h, "workspace-manifest": h,
+                "compiler": {"inputs": {"workspace-lock": h, "workspace-manifest": h, "i18n-pin": h,
                     "cargo-home-config": None, "cargo-home-config.toml": None,
                     "ancestor-0-config": None, "ancestor-0-config.toml": None},
                     "environment": p.env_identity(p.FLAGS + p.PROFILES, {})},
@@ -215,6 +264,27 @@ class Tests(unittest.TestCase):
             proof = {**provenance, "runtime_success": True, "parity_digest": p.manifest_digest(item), "selected": {"queue": False}}
             with self.assertRaises(ValueError):
                 p.reconcile_parity(item, [proof], "queue")
+
+    def test_explicit_absent_i18n_and_inconsistencies(self):
+        provenance = {"sha": "sha", "run": "run", "attempt": "1", "config": "default"}
+        value = self.complete_manifest(provenance)
+        value["compiler"]["inputs"]["i18n-pin"] = None
+        value["runtime"]["environment"]["CRAFT_I18N_REQUIRED"] = None
+        value["runtime"]["resources"]["craft-i18n"] = {"state": "absent"}
+        p.validate_manifest(value)
+        for section, key, changed in (("environment", "CRAFT_I18N_REQUIRED", p.sha(b"1")),
+                                      ("resources", "craft-i18n", {"files": 1, "bytes": 1, "tree_sha256": p.sha(b"unexpected")})):
+            wrong = copy.deepcopy(value)
+            wrong["runtime"][section][key] = changed
+            with self.assertRaisesRegex(ValueError, "i18n"):
+                p.validate_manifest(wrong)
+        resources = {name: None for name in ("corpus", "source-corpus", "pdf-fonts", "craft-fonts", "craft-i18n")}
+        env = {"CRAFT_PRINT_REQUIRE_QUEUE": "1", "CRAFT_FONTS_REQUIRED": "1"}
+        for variable in ("CRAFT_I18N_REQUIRED", "CRAFT_I18N_DIR"):
+            with self.assertRaisesRegex(ValueError, "conflicts"):
+                p.runtime_inputs(resources, {**env, variable: ""}, i18n_enabled=False)
+        with self.assertRaisesRegex(ValueError, "missing"):
+            p.runtime_inputs(resources, {**env, "CRAFT_I18N_REQUIRED": "1"}, i18n_enabled=True)
 
     def test_prebuild_snapshot_and_incremental_bound(self):
         self.assertIn("CARGO_INCREMENTAL", p.FLAGS)

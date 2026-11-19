@@ -129,14 +129,19 @@ def file_identity(path, required=False, budget=None):
     path = Path(path).absolute()
     # Inspect existing ancestors even when the optional leaf is absent.
     for item in (path, *path.parents):
-        if item.exists() or item.is_symlink():
-            no_links(item)
-    if not path.exists():
+        try:
+            item.lstat()
+        except FileNotFoundError:
+            continue
+        no_links(item)
+    try:
+        leaf = path.lstat()
+    except FileNotFoundError:
         if required:
             raise ValueError("missing required compiler input")
         return None
     no_links(path)
-    if not path.is_file() or path.stat().st_size > 16 * 1024 ** 2:
+    if not stat.S_ISREG(leaf.st_mode) or leaf.st_size > 16 * 1024 ** 2:
         raise ValueError("invalid compiler input")
     before = path.stat()
     budget.charge(bytes=before.st_size)
@@ -159,7 +164,8 @@ def compiler_inputs(workspace, cargo_home, env, budget=None):
         raise ValueError("unrecognized compiler environment override")
     workspace = Path(workspace).absolute()
     configs = {"workspace-lock": file_identity(workspace / "Cargo.lock", True, budget),
-               "workspace-manifest": file_identity(workspace / "Cargo.toml", True, budget)}
+               "workspace-manifest": file_identity(workspace / "Cargo.toml", True, budget),
+               "i18n-pin": file_identity(workspace / "craft-i18n.rev", budget=budget)}
     # Cargo searches ancestors as well as CARGO_HOME. Keep labels path-free.
     for index, root in enumerate((workspace, *workspace.parents)):
         for name in ("config", "config.toml"):
@@ -169,16 +175,23 @@ def compiler_inputs(workspace, cargo_home, env, budget=None):
     return {"inputs": configs, "environment": env_identity(FLAGS + PROFILES, env)}
 
 
-def runtime_inputs(resources, env, budget=None):
+def runtime_inputs(resources, env, budget=None, i18n_enabled=True):
     budget = budget or Budget()
     if any(name in env for name in SAMPLES):
         raise ValueError("Full-validation sample override present")
-    if env.get("CRAFT_PRINT_REQUIRE_QUEUE") != "1" or env.get("CRAFT_FONTS_REQUIRED") != "1" or env.get("CRAFT_I18N_REQUIRED") != "1":
+    if env.get("CRAFT_PRINT_REQUIRE_QUEUE") != "1" or env.get("CRAFT_FONTS_REQUIRED") != "1":
         raise ValueError("required Windows runtime contract disabled")
     if set(resources) != {"corpus", "source-corpus", "pdf-fonts", "craft-fonts", "craft-i18n"}:
         raise ValueError("missing or unknown runtime resource identity")
-    return {"environment": env_identity(SAMPLES + RUNTIME, env),
-            "resources": {label: resource_identity(root, budget, checkout_content=label in ("craft-fonts", "craft-i18n")) for label, root in resources.items()}}
+    if i18n_enabled:
+        if env.get("CRAFT_I18N_REQUIRED") != "1" or resources["craft-i18n"] is None:
+            raise ValueError("configured i18n missing required environment/root")
+    elif "CRAFT_I18N_REQUIRED" in env or "CRAFT_I18N_DIR" in env or resources["craft-i18n"] is not None:
+        raise ValueError("i18n absent pin conflicts with environment/root")
+    identities = {label: ({"state": "absent"} if label == "craft-i18n" and not i18n_enabled else
+                         resource_identity(root, budget, checkout_content=label in ("craft-fonts", "craft-i18n")))
+                  for label, root in resources.items()}
+    return {"environment": env_identity(SAMPLES + RUNTIME, env), "resources": identities}
 
 
 def printer_prerequisites(budget=None):
@@ -210,9 +223,10 @@ def manifest(workspace, cargo_home, resources, env, provenance):
     budget = Budget()
     if set(provenance) != {"sha", "run", "attempt", "config"} or not all(isinstance(v, str) and v for v in provenance.values()):
         raise ValueError("invalid parity provenance")
+    compiler = compiler_inputs(workspace, cargo_home, env, budget)
     result = {"schema": 1, "provenance": provenance,
-              "compiler": compiler_inputs(workspace, cargo_home, env, budget),
-              "runtime": runtime_inputs(resources, env, budget),
+              "compiler": compiler,
+              "runtime": runtime_inputs(resources, env, budget, i18n_enabled=compiler["inputs"]["i18n-pin"] is not None),
               "printer_prerequisites": printer_prerequisites(budget)}
     budget.charge()
     return validate_manifest(result)
@@ -240,7 +254,7 @@ def validate_manifest(value):
     for item in value["compiler"]["environment"].values():
         digest(item, nullable=True)
     inputs = value["compiler"]["inputs"]
-    required = {"workspace-lock", "workspace-manifest", "cargo-home-config", "cargo-home-config.toml"}
+    required = {"workspace-lock", "workspace-manifest", "i18n-pin", "cargo-home-config", "cargo-home-config.toml"}
     if not isinstance(inputs, dict) or not required.issubset(inputs):
         raise ValueError("missing parity compiler inputs")
     ancestors = set()
@@ -260,12 +274,19 @@ def validate_manifest(value):
     exact(value["runtime"], ("environment", "resources"), "runtime fields")
     exact(value["runtime"]["environment"], SAMPLES + RUNTIME, "runtime environment")
     runtime = value["runtime"]["environment"]
-    if any(runtime[name] is not None for name in SAMPLES) or any(runtime[name] != sha(b"1") for name in ("CRAFT_PRINT_REQUIRE_QUEUE", "CRAFT_FONTS_REQUIRED", "CRAFT_I18N_REQUIRED")):
+    if any(runtime[name] is not None for name in SAMPLES) or any(runtime[name] != sha(b"1") for name in ("CRAFT_PRINT_REQUIRE_QUEUE", "CRAFT_FONTS_REQUIRED")):
         raise ValueError("disabled parity runtime requirements")
     for item in runtime.values():
         digest(item, nullable=True)
     exact(value["runtime"]["resources"], ("corpus", "source-corpus", "pdf-fonts", "craft-fonts", "craft-i18n"), "resource set")
-    for item in value["runtime"]["resources"].values():
+    i18n_enabled = inputs["i18n-pin"] is not None
+    if runtime["CRAFT_I18N_REQUIRED"] != (sha(b"1") if i18n_enabled else None):
+        raise ValueError("i18n pin/environment mismatch")
+    for label, item in value["runtime"]["resources"].items():
+        if label == "craft-i18n" and not i18n_enabled:
+            if item != {"state": "absent"}:
+                raise ValueError("i18n absent pin/root mismatch")
+            continue
         exact(item, ("files", "bytes", "tree_sha256"), "resource evidence")
         if type(item["files"]) is not int or not 0 < item["files"] <= MAX_FILES or type(item["bytes"]) is not int or not 0 <= item["bytes"] <= MAX_BYTES:
             raise ValueError("invalid parity resource size")
@@ -310,8 +331,39 @@ def collect(config):
                  "source-corpus": workspace / ".test-inputs/photocraft/corpus",
                  "pdf-fonts": Path(os.environ["RUNNER_TEMP"]) / "craft-pdf-test-fonts",
                  "craft-fonts": workspace / "craft-fonts", "craft-i18n": workspace / "craft-i18n"}
+    pin_path = workspace / "craft-i18n.rev"
+    no_links(pin_path.parent)
+    try:
+        pin_info = pin_path.lstat()
+    except FileNotFoundError:
+        pin_info = None
+    if pin_info is not None:
+        no_links(pin_path)
+        if not stat.S_ISREG(pin_info.st_mode) or pin_info.st_size > 256:
+            raise ValueError("invalid i18n pin file")
+        with pin_path.open("rb") as stream:
+            raw_pin = stream.read(257)
+        after = pin_path.lstat()
+        no_links(pin_path)
+        if len(raw_pin) != pin_info.st_size or (pin_info.st_size, pin_info.st_mtime_ns, pin_info.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
+            raise ValueError("i18n pin changed while reading")
+        pin = raw_pin.decode("utf-8").strip()
+        if len(pin) != 40 or any(char not in "0123456789abcdef" for char in pin):
+            raise ValueError("invalid configured i18n pin")
+    else:
+        try:
+            resources["craft-i18n"].lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise ValueError("i18n root exists without source pin")
+        resources["craft-i18n"] = None
     for variable, label in (("CRAFT_PSD_CORPUS", "source-corpus"), ("CRAFT_PDF_TEST_FONT_DIR", "pdf-fonts"),
                             ("CRAFT_FONTS_DIR", "craft-fonts"), ("CRAFT_I18N_DIR", "craft-i18n")):
+        if resources[label] is None:
+            if variable in os.environ:
+                raise ValueError("i18n resource environment exists without source pin")
+            continue
         if Path(os.environ[variable]).resolve(strict=True) != resources[label].resolve(strict=True):
             raise ValueError("runtime resource path differs from contract")
     provenance = {"sha": os.environ["GITHUB_SHA"], "run": os.environ["GITHUB_RUN_ID"],
