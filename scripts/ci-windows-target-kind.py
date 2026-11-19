@@ -46,7 +46,8 @@ def baseline(config):
         raise ValueError("wrong artifact capture")
     inventory_bytes = (json.dumps(data["inventory"], sort_keys=True) + "\n").encode("utf-8")
     if hashlib.sha256(inventory_bytes).hexdigest() != capture["inventory_sha256"]:
-        raise ValueError("baseline inventory differs from captured artifact digest")    return data
+        raise ValueError("baseline inventory differs from captured artifact digest")
+    return data
 
 
 def expected_inventory(full, kind):
