@@ -5,6 +5,8 @@ probe="$(mktemp -d)"
 cp -R crates/plotter/src "$probe/src"
 if [ -d crates/plotter/tests ]; then cp -R crates/plotter/tests "$probe/tests"; fi
 cp rustfmt.toml "$probe/rustfmt.toml"
+# Preserve the repository policy that permits unwrap/panic in tests, not production.
+cp clippy.toml "$probe/clippy.toml"
 cat > "$probe/Cargo.toml" <<'TOML'
 [package]
 name = "craft-plotter"
