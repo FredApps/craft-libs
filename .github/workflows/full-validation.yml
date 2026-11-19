@@ -26,7 +26,7 @@ jobs:
       setup-command: bash scripts/ci-test-inputs.sh
       command: bash scripts/ci-windows-archive-pilot.sh ${{ matrix.features }}
       artifact-name: archive-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.features }}
-      artifact-path: ${{ github.workspace }}/pilot-bundle
+      artifact-path: pilot-bundle
   execute:
     needs: archive
     name: Run ${{ matrix.features }} ${{ matrix.shard }}/8
