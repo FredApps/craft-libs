@@ -96,7 +96,7 @@ def prepare(config):
         for path in sorted(root.rglob("*")):
             if path.is_symlink():
                 raise ValueError("linked runtime fixture")
-            if path.is_file():
+            if path.is_file() or path.is_dir():
                 entries.append((path, label + "/" + path.relative_to(root).as_posix()))
     with zipfile.ZipFile(BUNDLE / "runtime.zip", "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
         for path, name in entries:
@@ -122,10 +122,11 @@ def verify(config):
     with zipfile.ZipFile(BUNDLE / "runtime.zip") as archive:
         for info in archive.infolist():
             name = info.filename
-            parts = PurePosixPath(name).parts
+            member = name[:-1] if info.is_dir() else name
+            parts = PurePosixPath(member).parts
             if (name.startswith("/") or "\\" in name or ":" in name or
-                    len(parts) < 2 or any(p in (".", "..") for p in name.split("/")) or
-                    parts[0] not in roots or info.is_dir() or stat.S_ISLNK(info.external_attr >> 16)):
+                    len(parts) < 2 or any(p in (".", "..") for p in member.split("/")) or
+                    parts[0] not in roots or stat.S_ISLNK(info.external_attr >> 16)):
                 raise ValueError("unsafe fixture member")
             target = roots[parts[0]].joinpath(*parts[1:])
             target.resolve().relative_to(roots[parts[0]].resolve())
@@ -137,6 +138,9 @@ def verify(config):
             seen.add(key)
             destinations.append((info, target))
         for info, target in destinations:
+            if info.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
             target.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(info) as source, target.open("wb") as destination:
                 shutil.copyfileobj(source, destination)
