@@ -102,21 +102,41 @@ def compiler_units(lines):
 
 
 def verify_binaries(metadata, inventory, kind, units):
-    """Check labels against compatible artifacts, not executable-byte identity."""
+    """Return unique Cargo artifact matches; byte equality is checked separately."""
     expected = {(t["package"], t["name"], "lib" if t["kind"] == "proc-macro" else t["kind"])
                 for t in configured_targets(metadata) if t["kind"] in KINDS[kind]}
     actual = {(s["package-name"], s["binary-name"], s["kind"])
               for s in inventory["rust-suites"].values()}
-    if actual != expected:
+    if actual != expected or len(actual) != len(inventory["rust-suites"]):
         raise ValueError("configured target inventory differs from archive binaries")
     packages = {p["name"]: p["id"] for p in metadata["packages"] if p["id"] in metadata["workspace_members"]}
-    for package, name, target_kind in actual:
+    if len(packages) != len(metadata["workspace_members"]):
+        raise ValueError("ambiguous workspace package names")
+    matched = {}
+    for binary_id, suite in inventory["rust-suites"].items():
+        package, name, target_kind = suite["package-name"], suite["binary-name"], suite["kind"]
         matching = [u for u in units.values() if u["package_id"] == packages[package]
                     and u["target"]["name"] == name and u["profile"]["test"]
                     and (target_kind in u["target"]["kind"] or
                          target_kind == "lib" and "proc-macro" in u["target"]["kind"])]
         if len(matching) != 1:
             raise ValueError("test binary lacks exactly one actual compiler artifact")
+        matched[binary_id] = matching[0]
+    return matched
+
+
+def verify_archive_bytes(metadata, inventory, kind, units, extracted_root):
+    matched = verify_binaries(metadata, inventory, kind, units)
+    for binary_id, unit in matched.items():
+        if inventory["rust-suites"][binary_id]["package-id"] != unit["package_id"]:
+            raise ValueError("archive package identity differs from Cargo artifact")
+    built = contract.executable_hashes(
+        {binary_id: unit["executable"] for binary_id, unit in matched.items()},
+        metadata["target_directory"])
+    archived = contract.executable_hashes(contract.inventory_executable_paths(inventory), extracted_root)
+    if built != archived:
+        raise ValueError("archive executable bytes differ from Cargo artifacts")
+    return built
 
 
 def shared_library_features(unit_records, integration_records):
@@ -143,9 +163,12 @@ def capture(config, kind):
     if config not in contract.CONFIGS or kind not in KINDS:
         raise ValueError("invalid producer identity")
     metadata = contract.read("pilot-bundle/configured-metadata.json")
-    inventory = contract.inventory("pilot-bundle/inventory.json")
+    inventory = contract.read("pilot-bundle/inventory.json")
     units = compiler_units(Path("pilot-bundle/compiler-artifacts.jsonl").read_text(encoding="utf-8").splitlines())
-    verify_binaries(metadata, inventory, kind, units)
+    import os
+    executable_digests = verify_archive_bytes(metadata, inventory, kind, units,
+                                              Path(os.environ["RUNNER_TEMP"]) / "pilot-archive-verify")
+    contract.write("pilot-bundle/executable-digests.json", executable_digests)
     contract.write("pilot-bundle/compiler-units.json", units)
     contract.write("pilot-bundle/configured-targets.json", configured_targets(metadata))
     contract.prepare(config)
@@ -196,7 +219,8 @@ def reconcile():
             if any(digest != digests[0] for digest in digests):
                 raise ValueError("shards used different producer audits")
             for filename, key in (("compiler-units.json", "units_digest"),
-                                  ("configured-targets.json", "targets_digest")):
+                                      ("configured-targets.json", "targets_digest"),
+                                      ("executable-digests.json", "executables_digest")):
                 if contract.digest(roots[0] / filename) != digests[0][key]:
                     raise ValueError("producer audit digest differs")
             group_audits[kind] = {

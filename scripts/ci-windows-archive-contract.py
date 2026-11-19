@@ -8,9 +8,89 @@ import stat
 import zipfile
 import subprocess
 import sys
+import time
 
 BUNDLE = Path("pilot-bundle")
 CONFIGS = ("default", "all-features")
+MAX_EXECUTABLES = 2048
+MAX_EXECUTABLE_BYTES = 16 * 1024 ** 3
+MAX_HASH_SECONDS = 60
+
+
+def executable_hashes(paths, root):
+    """Hash bounded regular executable files within one explicit native-platform root."""
+    if not paths or len(paths) > MAX_EXECUTABLES:
+        raise ValueError("empty or excessive executable inventory")
+    root = Path(root).resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError("executable root is not a directory")
+    started = time.monotonic()
+    total = 0
+    seen = set()
+    result = {}
+    for binary_id, name in sorted(paths.items()):
+        if not isinstance(binary_id, str) or not binary_id or not isinstance(name, str):
+            raise ValueError("invalid executable identity/path")
+        path = Path(name)
+        if not path.is_absolute():
+            raise ValueError("executable path is not absolute")
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root)
+        key = os.path.normcase(str(resolved))
+        if key in seen:
+            raise ValueError("ambiguous shared executable path")
+        seen.add(key)
+        # Reject every Windows reparse point as well as POSIX symlinks. Do not
+        # silently permit junctions on Python versions without Path.is_junction.
+        if any(p.is_symlink() or
+               getattr(p.lstat(), "st_file_attributes", 0) &
+               getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+               for p in (path, *path.parents)):
+            raise ValueError("linked executable path")
+        before = resolved.stat()
+        if not stat.S_ISREG(before.st_mode) or before.st_size <= 0:
+            raise ValueError("missing or nonregular executable")
+        total += before.st_size
+        if total > MAX_EXECUTABLE_BYTES:
+            raise ValueError("executable hash byte budget exceeded")
+        h = hashlib.sha256()
+        read_bytes = 0
+        with resolved.open("rb") as stream:
+            while True:
+                if time.monotonic() - started > MAX_HASH_SECONDS:
+                    raise ValueError("executable hash time budget exceeded")
+                block = stream.read(1024 * 1024)
+                if not block:
+                    break
+                read_bytes += len(block)
+                if read_bytes > before.st_size:
+                    raise ValueError("executable changed while hashing")
+                h.update(block)
+        after = resolved.stat()
+        if (read_bytes != before.st_size or
+                (before.st_size, before.st_mtime_ns, before.st_ino) !=
+                (after.st_size, after.st_mtime_ns, after.st_ino)):
+            raise ValueError("executable changed while hashing")
+        result[binary_id] = h.hexdigest()
+    return result
+
+
+def inventory_executable_paths(data):
+    paths = {}
+    for key, suite in data["rust-suites"].items():
+        binary_id = suite["binary-id"]
+        if key != binary_id or binary_id in paths or suite["status"] != "listed":
+            raise ValueError("ambiguous or unlisted binary identity")
+        paths[binary_id] = suite["binary-path"]
+    return paths
+
+
+def verify_executables():
+    actual = executable_hashes(inventory_executable_paths(read("pilot-current.json")),
+                               os.environ["GITHUB_WORKSPACE"])
+    if actual != read(BUNDLE / "executable-digests.json"):
+        raise ValueError("extracted executable bytes differ from Cargo artifacts")
+    print("EXECUTABLE_BYTES_VERIFIED", len(actual))
 
 
 def digest(path):
@@ -181,10 +261,11 @@ def proof(config, shard, target_kind=None):
     if target_kind is not None:
         audit = {"metadata_digest": digest(BUNDLE / "configured-metadata.json"),
                  "units_digest": digest(BUNDLE / "compiler-units.json"),
-                 "targets_digest": digest(BUNDLE / "configured-targets.json")}
+                 "targets_digest": digest(BUNDLE / "configured-targets.json"),
+                 "executables_digest": digest(BUNDLE / "executable-digests.json")}
         write(Path("pilot-proof") / "audit-digests.json", audit)
         if shard == "1":
-            for name in ("compiler-units.json", "configured-targets.json"):
+            for name in ("compiler-units.json", "configured-targets.json", "executable-digests.json"):
                 shutil.copyfile(BUNDLE / name, Path("pilot-proof") / name)
 
 
@@ -216,6 +297,8 @@ if __name__ == "__main__":
         verify(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
     elif command == "compare":
         compare()
+    elif command == "verify-executables":
+        verify_executables()
     elif command == "proof":
         proof(sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) > 4 else None)
     elif command == "reconcile":

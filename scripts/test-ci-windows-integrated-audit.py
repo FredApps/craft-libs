@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+import tempfile
 spec = importlib.util.spec_from_file_location("audit", Path(__file__).with_name("ci-windows-integrated-audit.py"))
 audit = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(audit)
@@ -23,6 +24,34 @@ def stream(*records):
     return [json.dumps(r) for r in records] + [json.dumps({"reason": "build-finished", "success": True})]
 
 class Tests(unittest.TestCase):
+    def test_archive_bytes_are_bound_to_unique_compiler_artifact(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            built, extracted = root / "built", root / "extracted"
+            built.mkdir()
+            extracted.mkdir()
+            source, archived = built / "p.exe", extracted / "p.exe"
+            source.write_bytes(b"actual compiled executable")
+            archived.write_bytes(source.read_bytes())
+            data = metadata()
+            data["target_directory"] = str(built)
+            item = artifact()
+            item["executable"] = str(source)
+            item["filenames"] = [str(source)]
+            units = audit.compiler_units(stream(item))
+            inventory = {"rust-suites": {"p": {"package-name": "p", "package-id": "p",
+                "binary-id": "p", "binary-name": "p", "kind": "lib", "status": "listed",
+                "binary-path": str(archived)}}}
+            self.assertEqual(audit.verify_archive_bytes(data, inventory, "unit", units, extracted),
+                             {"p": audit.contract.digest(source)})
+            inventory["rust-suites"]["p"]["package-id"] = "wrong"
+            with self.assertRaisesRegex(ValueError, "package identity"):
+                audit.verify_archive_bytes(data, inventory, "unit", units, extracted)
+            inventory["rust-suites"]["p"]["package-id"] = "p"
+            archived.write_bytes(b"different compiled executable")
+            with self.assertRaisesRegex(ValueError, "bytes differ"):
+                audit.verify_archive_bytes(data, inventory, "unit", units, extracted)
+
     def test_integration_builds_all_tests_then_filters_archive(self):
         self.assertEqual(audit.selectors(metadata(), "integration"), ["--tests", "-E", "kind(test) | kind(example)"])
         self.assertEqual(audit.selectors(metadata(), "unit"), ["--lib"])
@@ -101,6 +130,9 @@ class Tests(unittest.TestCase):
         source = Path(__file__).with_name("ci-windows-archive-consumer.sh").read_text()
         self.assertLess(source.index('cargo nextest run '), source.index('git diff --exit-code'))
         self.assertLess(source.index('git diff --exit-code'), source.index('archive-contract.py proof'))
+        self.assertLess(source.index('archive-contract.py verify-executables'), source.index('cargo nextest run '))
+        self.assertLess(source.index('cargo nextest run '), source.rindex('archive-contract.py verify-executables'))
+        self.assertLess(source.rindex('archive-contract.py verify-executables'), source.index('archive-contract.py proof'))
 
     def test_actual_features_not_metadata_detect_changes(self):
         left = audit.compiler_units(stream(artifact()))
