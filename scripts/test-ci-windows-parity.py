@@ -25,7 +25,7 @@ class Tests(unittest.TestCase):
             env.update(RUNNER_OS="Windows", GITHUB_WORKSPACE=str(root), RUNNER_TEMP=str(root / "temp"),
                        GITHUB_SHA="a" * 40, GITHUB_RUN_ID="1", GITHUB_RUN_ATTEMPT="1")
             pin = root / "craft-i18n.rev"
-            with patch.dict(os.environ, env, clear=True), patch.object(Path, "cwd", return_value=root), patch.object(p, "manifest", return_value={}) as capture:
+            with patch.dict(os.environ, env, clear=True), patch.object(Path, "cwd", return_value=root), patch.object(Path, "home", return_value=root), patch.object(p, "manifest", return_value={}) as capture:
                 p.collect("default")
                 self.assertIsNone(capture.call_args.args[2]["craft-i18n"])
                 pin.write_text("a" * 40)
