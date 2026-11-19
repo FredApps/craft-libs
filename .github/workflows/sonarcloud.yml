@@ -14,7 +14,7 @@ jobs:
   default:
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@7d4597abb21f0a8fa959395b0789e79fa19849ca
     with:
-      os: '["ubuntu-24.04"]'
+      os: '["windows-latest","macos-latest"]'
       craft-fonts-ref: ""
       require-craft-fonts: false
       targets: ""
@@ -33,7 +33,7 @@ jobs:
   all-features:
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@7d4597abb21f0a8fa959395b0789e79fa19849ca
     with:
-      os: '["ubuntu-24.04"]'
+      os: '["windows-latest","macos-latest"]'
       craft-fonts-ref: ""
       require-craft-fonts: false
       targets: ""
@@ -41,7 +41,15 @@ jobs:
       free-disk-space: false
       timeout-minutes: 30
       gate-timeout-minutes: 25
-      setup-command: timeout 6m python3 scripts/psd-diagnostic/fetch.py
+      setup-command: |
+        set -euo pipefail
+        if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; assert sys.version_info >= (3, 9)' >/dev/null 2>&1; then
+          py=python3
+        else
+          py=python
+          "$py" -c 'import sys; assert sys.version_info >= (3, 9)'
+        fi
+        "$py" -c 'import subprocess,sys; subprocess.run([sys.executable,"scripts/psd-diagnostic/fetch.py"],timeout=360,check=True)'
       command: |
         set -euo pipefail
         cargo test -p craft-psd --locked --all-targets --all-features
