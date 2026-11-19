@@ -17,3 +17,6 @@ crates/fonts-build/tests/fixture/craft-fonts/fonts/**/OFL.txt -text
 
 # DXF drawing goldens assert exact writer bytes, including LF on every platform.
 crates/dxf/tests/data/drawing_*.dxf -text
+
+# Diagnostic manifests have pinned raw-byte hashes on every runner.
+scripts/psd-diagnostic/*.sha256 -text
