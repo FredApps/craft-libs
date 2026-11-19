@@ -1,0 +1,16 @@
+[package]
+name = "selector-b"
+version = "0.1.0"
+edition = "2024"
+[features]
+gate = []
+[[test]]
+name = "same"
+required-features = ["gate"]
+[[example]]
+name = "demo"
+test = false
+[[example]]
+name = "gated"
+test = true
+required-features = ["gate"]
