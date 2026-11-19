@@ -16,7 +16,8 @@ def metadata():
 
 def artifact(fresh=False, features=None):
     return {"reason": "compiler-artifact", "package_id": "p", "target": {"name": "p", "kind": ["lib"]},
-            "profile": {"test": True}, "features": features or ["on"], "fresh": fresh}
+            "profile": {"test": True}, "features": features or ["on"], "fresh": fresh,
+            "executable": "target/debug/p.exe", "filenames": ["target/debug/p.exe"]}
 
 def stream(*records):
     return [json.dumps(r) for r in records] + [json.dumps({"reason": "build-finished", "success": True})]
@@ -46,6 +47,19 @@ class Tests(unittest.TestCase):
                       stream(artifact(), artifact(features=["off"]))]:
             with self.assertRaises(ValueError):
                 audit.compiler_units(lines)
+    def test_distinct_outputs_are_not_collapsed(self):
+        first, second = artifact(), artifact()
+        second["executable"] = "target/host/p.exe"
+        second["filenames"] = ["target/host/p.exe"]
+        self.assertEqual(len(audit.compiler_units(stream(first, second))), 2)
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            audit.compiler_units(stream(first, first))
+
+    def test_proof_created_only_after_runtime_and_lockfile(self):
+        source = Path(__file__).with_name("ci-windows-archive-consumer.sh").read_text()
+        self.assertLess(source.index('cargo nextest run '), source.index('git diff --exit-code'))
+        self.assertLess(source.index('git diff --exit-code'), source.index('archive-contract.py proof'))
+
     def test_actual_features_not_metadata_detect_changes(self):
         left = audit.compiler_units(stream(artifact()))
         self.assertEqual(audit.shared_library_features(left, audit.compiler_units(stream(artifact(True)))), 1)
@@ -64,11 +78,15 @@ class Tests(unittest.TestCase):
         provenance = {"sha": "abc", "run": "1", "attempt": "1"}
         expected = {str(i): i == 3 for i in range(8)}
         proofs = [{"config": "default", "target_kind": "unit", "shard": str(i + 1),
-                   **provenance, "expected": expected, "selected": {str(i): expected[str(i)]}}
+                   **provenance, "runtime_success": True, "expected": expected, "selected": {str(i): expected[str(i)]}}
                   for i in range(8)]
         self.assertEqual(audit.reconcile_group(proofs, "default", "unit", provenance), expected)
         with self.assertRaisesRegex(ValueError, "missing"):
             audit.reconcile_group(proofs[:-1], "default", "unit", provenance)
+        proofs[0]["runtime_success"] = False
+        with self.assertRaisesRegex(ValueError, "runtime"):
+            audit.reconcile_group(proofs, "default", "unit", provenance)
+        proofs[0]["runtime_success"] = True
         proofs[1]["selected"] = proofs[0]["selected"]
         with self.assertRaisesRegex(ValueError, "duplicate"):
             audit.reconcile_group(proofs, "default", "unit", provenance)

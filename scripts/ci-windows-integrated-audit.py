@@ -87,15 +87,17 @@ def compiler_units(lines):
         if record.get("reason") != "compiler-artifact":
             continue
         target = record["target"]
-        # Keep profile, host/custom-build kind and test mode distinct. Do not drop
-        # fresh=True records: cached compilation units must remain in the audit.
-        key = json.dumps([record["package_id"], target["name"], target["kind"],
-                          record["profile"]], sort_keys=True)
-        value = {"features": sorted(record["features"]), "target": target,
-                 "package_id": record["package_id"], "profile": record["profile"],
-                 "fresh": record["fresh"]}
-        if key in units and units[key]["features"] != value["features"]:
-            raise ValueError("conflicting artifact features for one unit")
+        # Retain full Cargo identity, including source, output paths and profile.
+        # Cargo does not expose a complete compiler-unit dependency graph here.
+        value = {name: record[name] for name in (
+            "package_id", "target", "profile", "features", "fresh",
+            "executable", "filenames")}
+        value["features"] = sorted(value["features"])
+        value["filenames"] = sorted(value["filenames"])
+        key = json.dumps([value["package_id"], target, value["profile"],
+                          value["executable"], value["filenames"]], sort_keys=True)
+        if key in units:
+            raise ValueError("duplicate or ambiguous compiler artifact identity")
         units[key] = value
     if not finished or not units:
         raise ValueError("missing successful Cargo artifact stream")
@@ -103,6 +105,7 @@ def compiler_units(lines):
 
 
 def verify_binaries(metadata, inventory, kind, units):
+    """Check labels against compatible artifacts, not executable-byte identity."""
     expected = {(t["package"], t["name"], "lib" if t["kind"] == "proc-macro" else t["kind"])
                 for t in configured_targets(metadata) if t["kind"] in KINDS[kind]}
     actual = {(s["package-name"], s["binary-name"], s["kind"])
@@ -120,6 +123,7 @@ def verify_binaries(metadata, inventory, kind, units):
 
 
 def shared_library_features(unit_records, integration_records):
+    """Compare feature-set collections on shared labels only, not unit graphs."""
     def libraries(records):
         result = {}
         for unit in records.values():
@@ -151,7 +155,7 @@ def capture(config, kind):
     manifest = contract.read("pilot-bundle/manifest.json")
     manifest["identity"]["target_kind"] = kind
     contract.write("pilot-bundle/manifest.json", manifest)
-    print("ACTUAL_COMPILER_UNITS", config, kind, len(units),
+    print("CARGO_ARTIFACT_RECORDS", config, kind, len(units),
           "cached", sum(u["fresh"] for u in units.values()))
 
 
@@ -165,6 +169,8 @@ def reconcile_group(proofs, config, kind, provenance):
         identity = {"config": config, "target_kind": kind, "shard": str(shard), **provenance}
         if any(proof.get(key) != value for key, value in identity.items()):
             raise ValueError("wrong shard provenance")
+        if proof.get("runtime_success") is not True:
+            raise ValueError("missing successful runtime completion")
         if proof["expected"] != expected:
             raise ValueError("mixed expected inventories")
         if union.keys() & proof["selected"].keys():
@@ -206,7 +212,7 @@ def reconcile():
             raise ValueError("target kinds used different configured workspace inventories")
         common = shared_library_features(unit["units"], integration["units"])
         print("EXACT_RUNTIME_UNION", config, len(all_cases), "ignored", sum(all_cases.values()))
-        print("ACTUAL_SHARED_LIBRARY_FEATURES_IDENTICAL", config, common)
+        print("SHARED_LIBRARY_LABEL_FEATURE_SETS_IDENTICAL", config, common)
 
 if __name__ == "__main__":
     if sys.argv[1] == "selectors":

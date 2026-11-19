@@ -174,6 +174,7 @@ def proof(config, shard, target_kind=None):
         "run": os.environ["GITHUB_RUN_ID"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"],
         "expected": expected, "selected": selected,
         "target_kind": target_kind,
+        "runtime_success": True,  # Caller must invoke only after successful runtime and lockfile check.
     })
 
 

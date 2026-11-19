@@ -15,8 +15,8 @@ args=(--archive-file pilot-bundle/tests.tar.zst --extract-to "$GITHUB_WORKSPACE"
 cargo nextest list "${args[@]}" --message-format json > pilot-current.json
 python scripts/ci-windows-archive-contract.py compare
 cargo nextest list "${args[@]}" --partition "hash:$2/8" --message-format json > pilot-partition.json
-python scripts/ci-windows-archive-contract.py proof "$1" "$2" "$3"
 printf 'RUNTIME_START %s\n' "$(date -u +%FT%TZ)"
 cargo nextest run "${args[@]}" --partition "hash:$2/8"
 git diff --exit-code -- Cargo.lock
+python scripts/ci-windows-archive-contract.py proof "$1" "$2" "$3"
 printf 'RUNTIME_END %s\n' "$(date -u +%FT%TZ)"
