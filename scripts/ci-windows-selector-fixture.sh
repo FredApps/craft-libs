@@ -5,6 +5,8 @@ case "${1:-}" in default) features=() ;; all-features) features=(--all-features)
 scripts=$(cd "$(dirname "$0")" && pwd)
 python "$scripts/test-ci-windows-integrated-audit.py"
 python "$scripts/test-ci-windows-archive-contract.py"
+# Parity probe/queue boundaries are mocked; no application or printer execution.
+python "$scripts/test-ci-windows-parity.py"
 cd "$scripts/fixtures/archive-selector"
 cargo generate-lockfile
 cargo metadata --locked --format-version 1 "${features[@]}" > configured-metadata.json
