@@ -1,4 +1,4 @@
-name: Windows archive timing pilot
+name: Windows archive transfer and shard pilot
 on:
   workflow_dispatch:
 permissions:
@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         features: [default, all-features]
-    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    uses: ephraimm/craft-common-actions/.github/workflows/gate.yml@da827200d9a7d3968668364cb1139764389a5047
     with:
       os: '["windows-latest"]'
       select-os: '[]'
@@ -25,3 +25,73 @@ jobs:
         CRAFT_PRINT_REQUIRE_QUEUE=1
       setup-command: bash scripts/ci-test-inputs.sh
       command: bash scripts/ci-windows-archive-pilot.sh ${{ matrix.features }}
+      artifact-name: archive-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.features }}
+      artifact-path: ${{ github.workspace }}/pilot-bundle
+  execute:
+    needs: archive
+    name: Run ${{ matrix.features }} ${{ matrix.shard }}/8
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        features: [default, all-features]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+      CARGO_TERM_COLOR: always
+      CRAFT_PRINT_REQUIRE_QUEUE: 1
+      CRAFT_FONTS_REQUIRED: 1
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: storytold/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: craft-fonts
+          persist-credentials: false
+      - uses: storytold/craft-common-actions/actions/checkout-craft-i18n@41d7adf6c0ff7f98b2d12290fd6dc4a5d9111440
+      - uses: step-security/taiki-e-install-action@76747d22a7567cc4438546a84f11bdf18e670ab8
+        with:
+          tool: cargo-nextest@0.9.150
+      - name: Install matching Rust runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: archive-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.features }}-windows-latest
+          path: pilot-bundle
+      - name: Verify and execute archive shard
+        shell: bash
+        env:
+          CONFIG: ${{ matrix.features }}
+          SHARD: ${{ matrix.shard }}
+        run: bash scripts/ci-windows-archive-consumer.sh "$CONFIG" "$SHARD"
+      - name: Upload successful inventory proof
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: proof-${{ matrix.features }}-${{ matrix.shard }}
+          path: pilot-proof
+          if-no-files-found: error
+          retention-days: 1
+  reconcile:
+    needs: execute
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: proof-*
+          path: proofs
+      - run: python scripts/ci-windows-archive-contract.py reconcile
