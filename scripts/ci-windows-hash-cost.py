@@ -221,7 +221,13 @@ def main():
     executable_paths = extract_executables(bundle / "tests.tar.zst", workspace / "cost-executables", seven_zip, MAX_BYTES - runtime_bytes)
     extraction_seconds = time.monotonic() - extraction_started
     resources = {name: runtime_root / name for name in ("corpus", "source-corpus", "pdf-fonts")}
-    resources.update({"craft-fonts": workspace / "craft-fonts", "craft-i18n": workspace / "craft-i18n"})
+    resources["craft-fonts"] = workspace / "craft-fonts"
+    try:
+        (workspace / "craft-i18n").lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise ValueError("unexpected i18n resource for source without i18n pin")
     scans = []
     previous = None
     for index in range(2):
@@ -245,6 +251,7 @@ def main():
               "fixture_sha": os.environ["GITHUB_SHA"], "payload_verify_seconds": payload_seconds,
               "extraction_seconds": extraction_seconds, "runtime_extracted_bytes": runtime_bytes, "scans": scans,
               "script_seconds": time.monotonic() - STARTED, "application_executed": False,
+              "i18n": "not-configured: verified absent craft-i18n.rev in exact source tree",
               "cache_note": "both scans follow extraction; neither is cold-filesystem evidence"}
     print(json.dumps(report, sort_keys=True))
     Path("hash-cost-report.json").write_text(json.dumps(report, sort_keys=True, indent=2), encoding="utf-8")

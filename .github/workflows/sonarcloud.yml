@@ -25,11 +25,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Cannot read artifact metadata' }
           $artifact = $raw | ConvertFrom-Json
           if ($artifact.id -ne 14496542319 -or $artifact.name -ne 'archive-44451212129-1-all-features-integration-windows-latest' -or $artifact.expired -or $artifact.size_in_bytes -ne 666942881 -or $artifact.workflow_run.id -ne 44451212129 -or $artifact.workflow_run.head_sha -ne '2f3345d60d0696680a09028805f0a7b2a483e54b') { throw 'Artifact identity changed or expired' }
-          $encoded = gh api 'repos/FredApps/craft-libs/contents/craft-i18n.rev?ref=2f3345d60d0696680a09028805f0a7b2a483e54b' --jq .content
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot read source i18n pin' }
-          $pin = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($encoded -join '') -replace '\s', '')).Trim()
-          if ($pin -notmatch '^[0-9a-f]{40}$') { throw 'Invalid source i18n pin' }
-          "i18n=$pin" >> $env:GITHUB_OUTPUT
+          # This exact historical source predates the optional i18n pin.
+          $treeRaw = gh api 'repos/FredApps/craft-libs/git/trees/2f3345d60d0696680a09028805f0a7b2a483e54b?recursive=1' --jq '{truncated, pins: [.tree[] | select(.path == "craft-i18n.rev")]}'
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot verify source tree' }
+          $tree = $treeRaw | ConvertFrom-Json
+          if ($tree.truncated -or @($tree.pins).Count -ne 0) { throw 'Expected complete tree with absent i18n pin' }
       - uses: actions/download-artifact@v8.0.2
         with:
           artifact-ids: '14496542319'
@@ -43,12 +43,6 @@ jobs:
           repository: storytold/craft-fonts
           ref: b076417b5880bd4154bd22f00695b1d28c6bea83
           path: craft-fonts
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: storytold/craft-i18n
-          ref: ${{ steps.source.outputs.i18n }}
-          path: craft-i18n
           persist-credentials: false
       - name: Pure extraction safety regressions, no application execution
         shell: pwsh
