@@ -1,27 +1,310 @@
-name: SonarCloud
-
+# Inactive candidate. Review before installing on a diagnostic-only branch.
+# Runtime-only pilot: not full coverage, graph equivalence or a proven 30m gate.
+name: Windows integrated target-kind runtime diagnostic
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened]
-
+  workflow_dispatch:
 permissions:
   contents: read
-
 concurrency:
-  group: sonarcloud-${{ github.ref }}
-  # A push to main is the run that publishes coverage; superseded runs there would never finish.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
-
+  group: windows-integrated-pilot-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  sonarcloud:
-    # Track shared CI improvements on main.
-    uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
+  archive_default_unit:
+    name: Archive default unit
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@7d4597abb21f0a8fa959395b0789e79fa19849ca
     with:
-      pdf-test-fonts: true
-      # The codec and format code behind features that are off by default. Without these the
-      # coverage build never compiles it, and new code there reads as untested.
-      cargo-features: >-
-        craft-image-codecs/avif,craft-image-codecs/avif-decode,craft-video/dnx,craft-video/vp8,craft-video/prores,craft-video/h264,craft-video/hevc,craft-video/vp9,craft-video/av1,craft-video/threads,craft-audio/decode,craft-audio/encode,craft-audio/peaks,craft-audio/rayon,craft-audio/serde,craft-media/matroska,craft-media/ogg,craft-media/bitstream,craft-media/serde,craft-mesh/stl,craft-mesh/obj,craft-mesh/ply,craft-mesh/gltf,craft-metafile/write,craft-image-codecs/sgi,craft-image-codecs/sunraster,craft-jsonrpc/async-lines
-    secrets: inherit
+      os: '["windows-latest"]'
+      select-os: '[]'
+      timeout-minutes: 25
+      tools: cargo-nextest@0.9.150
+      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      windows-env: |
+        CARGO_PROFILE_DEV_DEBUG=0
+        CRAFT_PRINT_REQUIRE_QUEUE=1
+      setup-command: bash scripts/ci-test-inputs.sh
+      command: bash scripts/ci-windows-integrated-producer.sh default unit
+      artifact-name: archive-${{ github.run_id }}-${{ github.run_attempt }}-default-unit
+      artifact-path: pilot-bundle
+  execute_default_unit:
+    needs: archive_default_unit
+    name: Run default unit ${{ matrix.shard }}/8
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+      CARGO_TERM_COLOR: always
+      CRAFT_PRINT_REQUIRE_QUEUE: 1
+      CRAFT_FONTS_REQUIRED: 1
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: storytold/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: craft-fonts
+          persist-credentials: false
+      - uses: storytold/craft-common-actions/actions/checkout-craft-i18n@41d7adf6c0ff7f98b2d12290fd6dc4a5d9111440
+      - uses: step-security/taiki-e-install-action@v2.87.32
+        with:
+          tool: cargo-nextest@0.9.150
+      - name: Install matching Rust runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: archive-${{ github.run_id }}-${{ github.run_attempt }}-default-unit-windows-latest
+          path: pilot-bundle
+      - name: Verify and execute archive shard
+        shell: bash
+        env:
+          CONFIG: default
+          TARGET_KIND: unit
+          SHARD: ${{ matrix.shard }}
+        run: bash scripts/ci-windows-archive-consumer.sh "$CONFIG" "$SHARD" "$TARGET_KIND"
+      - name: Upload successful inventory proof
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: proof-default-unit-${{ matrix.shard }}
+          path: pilot-proof
+          if-no-files-found: error
+          retention-days: 1
+  archive_default_integration:
+    name: Archive default integration
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@7d4597abb21f0a8fa959395b0789e79fa19849ca
+    with:
+      os: '["windows-latest"]'
+      select-os: '[]'
+      timeout-minutes: 25
+      tools: cargo-nextest@0.9.150
+      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      windows-env: |
+        CARGO_PROFILE_DEV_DEBUG=0
+        CRAFT_PRINT_REQUIRE_QUEUE=1
+      setup-command: bash scripts/ci-test-inputs.sh
+      command: bash scripts/ci-windows-integrated-producer.sh default integration
+      artifact-name: archive-${{ github.run_id }}-${{ github.run_attempt }}-default-integration
+      artifact-path: pilot-bundle
+  execute_default_integration:
+    needs: archive_default_integration
+    name: Run default integration ${{ matrix.shard }}/8
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+      CARGO_TERM_COLOR: always
+      CRAFT_PRINT_REQUIRE_QUEUE: 1
+      CRAFT_FONTS_REQUIRED: 1
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: storytold/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: craft-fonts
+          persist-credentials: false
+      - uses: storytold/craft-common-actions/actions/checkout-craft-i18n@41d7adf6c0ff7f98b2d12290fd6dc4a5d9111440
+      - uses: step-security/taiki-e-install-action@v2.87.32
+        with:
+          tool: cargo-nextest@0.9.150
+      - name: Install matching Rust runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: archive-${{ github.run_id }}-${{ github.run_attempt }}-default-integration-windows-latest
+          path: pilot-bundle
+      - name: Verify and execute archive shard
+        shell: bash
+        env:
+          CONFIG: default
+          TARGET_KIND: integration
+          SHARD: ${{ matrix.shard }}
+        run: bash scripts/ci-windows-archive-consumer.sh "$CONFIG" "$SHARD" "$TARGET_KIND"
+      - name: Upload successful inventory proof
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: proof-default-integration-${{ matrix.shard }}
+          path: pilot-proof
+          if-no-files-found: error
+          retention-days: 1
+  archive_all_features_unit:
+    name: Archive all-features unit
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@7d4597abb21f0a8fa959395b0789e79fa19849ca
+    with:
+      os: '["windows-latest"]'
+      select-os: '[]'
+      timeout-minutes: 25
+      tools: cargo-nextest@0.9.150
+      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      windows-env: |
+        CARGO_PROFILE_DEV_DEBUG=0
+        CRAFT_PRINT_REQUIRE_QUEUE=1
+      setup-command: bash scripts/ci-test-inputs.sh
+      command: bash scripts/ci-windows-integrated-producer.sh all-features unit
+      artifact-name: archive-${{ github.run_id }}-${{ github.run_attempt }}-all-features-unit
+      artifact-path: pilot-bundle
+  execute_all_features_unit:
+    needs: archive_all_features_unit
+    name: Run all-features unit ${{ matrix.shard }}/8
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+      CARGO_TERM_COLOR: always
+      CRAFT_PRINT_REQUIRE_QUEUE: 1
+      CRAFT_FONTS_REQUIRED: 1
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: storytold/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: craft-fonts
+          persist-credentials: false
+      - uses: storytold/craft-common-actions/actions/checkout-craft-i18n@41d7adf6c0ff7f98b2d12290fd6dc4a5d9111440
+      - uses: step-security/taiki-e-install-action@v2.87.32
+        with:
+          tool: cargo-nextest@0.9.150
+      - name: Install matching Rust runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: archive-${{ github.run_id }}-${{ github.run_attempt }}-all-features-unit-windows-latest
+          path: pilot-bundle
+      - name: Verify and execute archive shard
+        shell: bash
+        env:
+          CONFIG: all-features
+          TARGET_KIND: unit
+          SHARD: ${{ matrix.shard }}
+        run: bash scripts/ci-windows-archive-consumer.sh "$CONFIG" "$SHARD" "$TARGET_KIND"
+      - name: Upload successful inventory proof
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: proof-all-features-unit-${{ matrix.shard }}
+          path: pilot-proof
+          if-no-files-found: error
+          retention-days: 1
+  archive_all_features_integration:
+    name: Archive all-features integration
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@7d4597abb21f0a8fa959395b0789e79fa19849ca
+    with:
+      os: '["windows-latest"]'
+      select-os: '[]'
+      timeout-minutes: 25
+      tools: cargo-nextest@0.9.150
+      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      windows-env: |
+        CARGO_PROFILE_DEV_DEBUG=0
+        CRAFT_PRINT_REQUIRE_QUEUE=1
+      setup-command: bash scripts/ci-test-inputs.sh
+      command: bash scripts/ci-windows-integrated-producer.sh all-features integration
+      artifact-name: archive-${{ github.run_id }}-${{ github.run_attempt }}-all-features-integration
+      artifact-path: pilot-bundle
+  execute_all_features_integration:
+    needs: archive_all_features_integration
+    name: Run all-features integration ${{ matrix.shard }}/8
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+      CARGO_TERM_COLOR: always
+      CRAFT_PRINT_REQUIRE_QUEUE: 1
+      CRAFT_FONTS_REQUIRED: 1
+      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: storytold/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: craft-fonts
+          persist-credentials: false
+      - uses: storytold/craft-common-actions/actions/checkout-craft-i18n@41d7adf6c0ff7f98b2d12290fd6dc4a5d9111440
+      - uses: step-security/taiki-e-install-action@v2.87.32
+        with:
+          tool: cargo-nextest@0.9.150
+      - name: Install matching Rust runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: archive-${{ github.run_id }}-${{ github.run_attempt }}-all-features-integration-windows-latest
+          path: pilot-bundle
+      - name: Verify and execute archive shard
+        shell: bash
+        env:
+          CONFIG: all-features
+          TARGET_KIND: integration
+          SHARD: ${{ matrix.shard }}
+        run: bash scripts/ci-windows-archive-consumer.sh "$CONFIG" "$SHARD" "$TARGET_KIND"
+      - name: Upload successful inventory proof
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: proof-all-features-integration-${{ matrix.shard }}
+          path: pilot-proof
+          if-no-files-found: error
+          retention-days: 1
+  reconcile:
+    needs: [archive_default_unit, execute_default_unit, archive_default_integration, execute_default_integration, archive_all_features_unit, execute_all_features_unit, archive_all_features_integration, execute_all_features_integration]
+    if: ${{ success() && needs.archive_default_unit.result == 'success' && needs.execute_default_unit.result == 'success' && needs.archive_default_integration.result == 'success' && needs.execute_default_integration.result == 'success' && needs.archive_all_features_unit.result == 'success' && needs.execute_all_features_unit.result == 'success' && needs.archive_all_features_integration.result == 'success' && needs.execute_all_features_integration.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # No run-id override: download-artifact is restricted to this workflow run.
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          pattern: proof-*
+          path: proofs
+      - run: python scripts/ci-windows-integrated-audit.py reconcile
