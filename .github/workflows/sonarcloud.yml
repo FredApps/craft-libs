@@ -1,27 +1,24 @@
-name: SonarCloud
-
+name: MXF lossless partition diagnostic
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened]
-
+  workflow_dispatch:
 permissions:
   contents: read
-
 concurrency:
-  group: sonarcloud-${{ github.ref }}
-  # A push to main is the run that publishes coverage; superseded runs there would never finish.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
-
+  group: mxf-partitions-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  sonarcloud:
-    # Track shared CI improvements on main.
-    uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
+  focused:
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@7d4597abb21f0a8fa959395b0789e79fa19849ca
     with:
-      pdf-test-fonts: true
-      # The codec and format code behind features that are off by default. Without these the
-      # coverage build never compiles it, and new code there reads as untested.
-      cargo-features: >-
-        craft-image-codecs/avif,craft-image-codecs/avif-decode,craft-video/dnx,craft-video/vp8,craft-video/prores,craft-video/h264,craft-video/hevc,craft-video/vp9,craft-video/av1,craft-video/threads,craft-audio/decode,craft-audio/encode,craft-audio/peaks,craft-audio/rayon,craft-audio/serde,craft-media/matroska,craft-media/ogg,craft-media/bitstream,craft-media/serde,craft-mesh/stl,craft-mesh/obj,craft-mesh/ply,craft-mesh/gltf,craft-metafile/write,craft-image-codecs/sgi,craft-image-codecs/sunraster,craft-jsonrpc/async-lines
-    secrets: inherit
+      os: '["windows-latest", "ubuntu-latest"]'
+      select-os: '[]'
+      timeout-minutes: 25
+      tools: cargo-nextest@0.9.150
+      env: |
+        CARGO_PROFILE_DEV_DEBUG=0
+      lint-command: |
+        cargo fmt --package craft-media --check
+        cargo clippy --locked --package craft-media --all-features --all-targets -- -D warnings
+      command: |
+        unset CRAFT_HOSTILE_DIVISOR PROPTEST_CASES CRAFT_MEDIA_HOSTILE_MULT
+        cargo nextest run --locked --package craft-media --all-features --lib --profile ci -E 'test(/^mxf::/)'
