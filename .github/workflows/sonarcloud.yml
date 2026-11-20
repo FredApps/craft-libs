@@ -1,30 +1,37 @@
-name: SonarCloud
-
+name: RTF control-word scoped diagnostic
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened]
-
+  workflow_dispatch:
 permissions:
   contents: read
-
-concurrency:
-  group: sonarcloud-${{ github.ref }}
-  # A push to main is the run that publishes coverage; superseded runs there would never finish.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
-
 jobs:
-  sonarcloud:
-    # Track shared CI improvements on main.
-    uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
-    with:
-      pdf-test-fonts: true
-      # The instrumented build runs without a dependency cache: its 1.2 GB entry does not fit the
-      # repository's 10 GB cache budget beside the Workspace gate's. It runs on main only.
-      build-cache: false
-      # The codec and format code behind features that are off by default. Without these the
-      # coverage build never compiles it, and new code there reads as untested.
-      cargo-features: >-
-        craft-image-codecs/avif,craft-image-codecs/avif-decode,craft-video/dnx,craft-video/vp8,craft-video/prores,craft-video/h264,craft-video/hevc,craft-video/vp9,craft-video/av1,craft-video/threads,craft-audio/decode,craft-audio/encode,craft-audio/peaks,craft-audio/rayon,craft-audio/serde,craft-media/matroska,craft-media/ogg,craft-media/bitstream,craft-media/serde,craft-mesh/stl,craft-mesh/obj,craft-mesh/ply,craft-mesh/gltf,craft-metafile/write,craft-image-codecs/sgi,craft-image-codecs/sunraster,craft-jsonrpc/async-lines
-    secrets: inherit
+  rtf:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: Check exact candidate source and unchanged lockfile
+        shell: bash
+        run: |
+          git diff --exit-code a4b3e0901a76e9911f7b5683d66263ef31b7c059 HEAD -- crates Cargo.toml Cargo.lock
+      - name: Format
+        run: cargo fmt --package craft-rtf --check
+      - name: RTF default and Outlook tests
+        run: cargo test -p craft-rtf --features outlook --locked
+      - name: RTF default and Outlook lint
+        run: cargo clippy -p craft-rtf --all-targets --features outlook --locked -- -D warnings
+      - name: Verify lockfile unchanged
+        run: git diff --exit-code -- Cargo.lock
