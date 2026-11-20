@@ -5,6 +5,63 @@ pub fn is_rtf(bytes: &[u8]) -> bool {
     bytes.trim_ascii_start().starts_with(b"{\\rtf")
 }
 
+/// Borrowed spelling of a control word, without interpreting its argument.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ControlWord<'a> {
+    /// ASCII letters, without the leading backslash.
+    pub name: &'a str,
+    /// Decimal digits, optionally preceded by a minus. A lone minus is preserved too.
+    pub argument: Option<&'a str>,
+    /// Absolute byte offset after the word, argument and optional single-space delimiter.
+    pub end: usize,
+}
+
+/// Scans a control word starting at the backslash at `at`.
+///
+/// Returns `None` unless that position starts a backslash followed by an ASCII letter.
+/// Names and arguments are borrowed in full, without truncation, numeric conversion or
+/// allocation. A lone minus is an argument spelling, not a valid number. Only one ASCII
+/// space is consumed as a delimiter; other following bytes are left untouched. `bin` is
+/// just a word here: its payload is not consumed.
+///
+/// This is for readers that need raw spelling or their own numeric range. Work is linear
+/// in the scanned span, bounded by `bytes.len()`; callers should bound their input size.
+/// [`Tokens`] retains its bounded names, arguments and binary-payload handling.
+pub fn control_word(bytes: &[u8], at: usize) -> Option<ControlWord<'_>> {
+    scan_word(bytes, at, usize::MAX, usize::MAX, true)
+}
+
+fn scan_word(bytes: &[u8], at: usize, name_limit: usize, digit_limit: usize, lone_minus: bool) -> Option<ControlWord<'_>> {
+    if bytes.get(at) != Some(&b'\\') {
+        return None;
+    }
+    let start = at.checked_add(1)?;
+    if !bytes.get(start).is_some_and(u8::is_ascii_alphabetic) {
+        return None;
+    }
+    let mut j = start;
+    while j - start < name_limit && bytes.get(j).is_some_and(u8::is_ascii_alphabetic) {
+        j += 1;
+    }
+    let name = std::str::from_utf8(bytes.get(start..j)?).ok()?;
+    let neg = bytes.get(j) == Some(&b'-');
+    let digits = j + usize::from(neg);
+    let mut end = digits;
+    while end - digits < digit_limit && bytes.get(end).is_some_and(u8::is_ascii_digit) {
+        end += 1;
+    }
+    let argument = if end > digits || neg && lone_minus {
+        Some(std::str::from_utf8(bytes.get(j..end)?).ok()?)
+    } else {
+        end = j;
+        None
+    };
+    if bytes.get(end) == Some(&b' ') {
+        end += 1;
+    }
+    Some(ControlWord { name, argument, end })
+}
+
 /// One token.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Token<'a> {
@@ -56,32 +113,17 @@ impl<'a> Tokens<'a> {
 
     fn word(&mut self) -> Token<'a> {
         let b = self.bytes;
-        let start = self.at + 1;
-        let mut j = start;
-        while b.get(j).is_some_and(u8::is_ascii_alphabetic) && j - start < 32 {
-            j += 1;
-        }
-        let name = b.get(start..j).and_then(|w| std::str::from_utf8(w).ok()).unwrap_or("");
-        let neg = b.get(j) == Some(&b'-');
-        let digits = j + usize::from(neg);
-        let mut k = digits;
-        while b.get(k).is_some_and(u8::is_ascii_digit) && k - digits < 10 {
-            k += 1;
-        }
-        let param = if k > digits {
-            // At most 10 digits, so it fits an i64.
-            let v = b.get(digits..k).and_then(|d| std::str::from_utf8(d).ok()).and_then(|d| d.parse::<i64>().ok()).unwrap_or(0);
-            let v = if neg { -v } else { v };
+        // Tokenization keeps its existing resource limits and numeric interpretation.
+        let Some(ControlWord { name, argument, end: k }) = scan_word(b, self.at, 32, 10, false) else {
+            return Token::Word { name: "", param: None };
+        };
+        let param = argument.map(|argument| {
+            // At most 10 digits plus a sign, so it fits an i64.
+            let v = argument.parse::<i64>().unwrap_or(0);
             let dttm = matches!(name, "revdttm" | "revdttmdel" | "crdate" | "prdate");
             let v = if dttm && v > i64::from(i32::MAX) && v <= i64::from(u32::MAX) { v - (1i64 << 32) } else { v };
-            Some(v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32)
-        } else {
-            k = j;
-            None
-        };
-        if b.get(k) == Some(&b' ') {
-            k += 1;
-        }
+            v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+        });
         self.at = k;
         if name == "bin" {
             let n = usize::try_from(param.unwrap_or(0)).unwrap_or(0);
@@ -229,3 +271,7 @@ mod tests {
         assert_eq!((t.next(), t.offset()), (Some(Text(b"ab")), 2));
     }
 }
+
+#[cfg(test)]
+#[path = "lex_span_tests.rs"]
+mod span_tests;

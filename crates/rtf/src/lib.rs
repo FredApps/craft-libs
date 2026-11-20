@@ -42,7 +42,7 @@ mod text;
 mod write;
 
 pub use date::{date_words, dttm_to_iso, iso_date, iso_to_dttm};
-pub use lex::{Token, Tokens, is_rtf};
+pub use lex::{ControlWord, Token, Tokens, control_word, is_rtf};
 pub use model::{Align, Block, COLUMN_BREAK, Cell, CharFmt, Document, LINE_BREAK, PAGE_BREAK, Para, Run, Table, VertAlign};
 pub use read::{MAX_COLORS, MAX_FONT_NAME, MAX_FONTS, MAX_GROUPS, NotRtf, read};
 pub use text::TextDecoder;
